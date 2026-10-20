@@ -1,3 +1,8 @@
+output "cloud_run_service_url" {
+  description = "The base HTTPS endpoint for your Antigravity Cloud Orchestrator"
+  value       = google_cloud_run_v2_service.agy_service.uri
+}
+
 output "cloud_run_webhook_url" {
   description = "The HTTPS endpoint for your Antigravity Cloud Orchestrator"
   value       = "${google_cloud_run_v2_service.agy_service.uri}/chat"

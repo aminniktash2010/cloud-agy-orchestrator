@@ -58,6 +58,24 @@ jobs:
           adopt google_storage_bucket.agent_cache project-51459e90-fbb3-471f-9f9-agy-repo-cache
           adopt google_cloud_run_v2_service.agy_service projects/project-51459e90-fbb3-471f-9f9/locations/us-central1/services/agy-cloud-orchestrator
           terraform apply -auto-approve
+          terraform output
+
+      - name: Verify Cloud Run Service & Health Check
+        run: |
+          SERVICE_URL=$(gcloud run services describe agy-cloud-orchestrator --region=us-central1 --project=project-51459e90-fbb3-471f-9f9 --format='value(status.url)')
+          echo "=================================================="
+          echo "CLOUD_RUN_SERVICE_URL: $SERVICE_URL"
+          echo "CLOUD_RUN_WEBHOOK_URL: $SERVICE_URL/chat"
+          echo "=================================================="
+          echo "### 🚀 Cloud Run Service Endpoint" >> $GITHUB_STEP_SUMMARY
+          echo "- **Base URL:** \`$SERVICE_URL\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Webhook URL:** \`$SERVICE_URL/chat\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Health Check:** \`$SERVICE_URL/health\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Web PWA:** https://aminniktash2010.github.io/cloud-agy-orchestrator/" >> $GITHUB_STEP_SUMMARY
+
+          echo "Pinging Cloud Run /health..."
+          curl -f -sS "$SERVICE_URL/health"
+          echo ""
 
   deploy-chat-pwa:
     needs: deploy-infra
