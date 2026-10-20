@@ -8,9 +8,12 @@
     :root {
       --bg: #0b0f19;
       --card: #151c2c;
+      --card-alt: #0f1523;
       --accent: #38bdf8;
       --text: #f1f5f9;
       --muted: #94a3b8;
+      --border: #2e3a52;
+      --success: #10b981;
     }
     body {
       font-family: system-ui, -apple-system, sans-serif;
@@ -23,13 +26,14 @@
     }
     .container {
       width: 100%;
-      max-width: 760px;
+      max-width: 920px;
       background: var(--card);
       border-radius: 14px;
       padding: 1.5rem;
       box-shadow: 0 10px 30px rgba(0,0,0,0.5);
     }
     h1 { margin-top: 0; font-size: 1.4rem; color: var(--accent); }
+    h2 { margin-top: 2rem; font-size: 1.15rem; color: var(--accent); border-top: 1px solid var(--border); padding-top: 1.25rem; }
     label { display: block; margin-top: 1rem; font-size: 0.85rem; color: var(--muted); }
     input, select, textarea, button {
       width: 100%;
@@ -37,8 +41,8 @@
       margin-top: 0.35rem;
       padding: 0.75rem;
       border-radius: 8px;
-      border: 1px solid #2e3a52;
-      background: #0f1523;
+      border: 1px solid var(--border);
+      background: var(--card-alt);
       color: var(--text);
       font-size: 0.95rem;
     }
@@ -59,6 +63,71 @@
       font-size: 0.85rem;
       white-space: pre-wrap;
     }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 0.85rem;
+      margin-top: 1rem;
+    }
+    .proj-card {
+      background: var(--card-alt);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .proj-card h3 {
+      margin: 0 0 0.35rem 0;
+      font-size: 1rem;
+      color: var(--text);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .badge {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.45rem;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .proj-meta {
+      font-size: 0.78rem;
+      color: var(--accent);
+      margin-bottom: 0.4rem;
+    }
+    .proj-desc {
+      font-size: 0.82rem;
+      color: var(--muted);
+      line-height: 1.4;
+      margin-bottom: 0.85rem;
+    }
+    .proj-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .proj-actions a, .proj-actions button {
+      flex: 1;
+      margin: 0;
+      padding: 0.45rem 0.6rem;
+      font-size: 0.78rem;
+      text-align: center;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+    .btn-preview {
+      background: var(--accent);
+      color: #0b0f19;
+    }
+    .btn-github {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
   </style>
 </head>
 <body>
@@ -70,13 +139,18 @@
     <label>Webhook Secret (Saved in Browser Password Manager)</label>
     <input id="secret" type="password" placeholder="Enter WEBHOOK_SECRET" />
 
-    <label>Target Repository (aminniktash2010)</label>
+    <label>Target Repository (aminniktash2010 — All 10 Antigravity Projects)</label>
     <select id="repo">
-      <option value="Atari-TV">Atari-TV</option>
-      <option value="River-Ride">River-Ride</option>
-      <option value="price-tracker">price-tracker</option>
-      <option value="Mamali-IPTV">Mamali-IPTV</option>
-      <option value="SpeakConfidentTV">SpeakConfidentTV</option>
+      <option value="AMPtech-Hub">AMPtech-Hub (Android Mobile / SDK 36)</option>
+      <option value="Atari-TV">Atari-TV (Android TV Atari 2600 Emulator & Shelf)</option>
+      <option value="River-Ride">River-Ride (Android & Android TV Arcade)</option>
+      <option value="price-tracker">price-tracker (Android PriceGuard App)</option>
+      <option value="media-tracker">media-tracker (Web + Flutter + Vertex AI Gemini)</option>
+      <option value="Mamali-IPTV">Mamali-IPTV (Android TV & Mobile IPTV v3.1)</option>
+      <option value="SpeakConfidentTV">SpeakConfidentTV (React Native Android TV)</option>
+      <option value="Home-Painting-Marketplace-">Home-Painting-Marketplace- (Web Marketplace)</option>
+      <option value="gcp-wif-foundation">gcp-wif-foundation (GCP Keyless WIF Foundation)</option>
+      <option value="cloud-agy-orchestrator">cloud-agy-orchestrator (Cloud Run Agent Orchestrator)</option>
     </select>
 
     <label>Architect & Stitch Prompt</label>
@@ -85,6 +159,9 @@
     <button onclick="sendTask()">Execute in Cloud Run</button>
     <button onclick="openPreview()" style="margin-top: 0.75rem; background: #1e293b; color: #38bdf8; border: 1px solid #38bdf8;">🌐 Open Live Browser Preview for Selected Repo</button>
     <pre id="output">Ready. Zero local compute required.</pre>
+
+    <h2>📱 All Antigravity Projects Portfolio (Synced with Gemini @Google Drive)</h2>
+    <div id="projects-grid" class="grid"></div>
   </div>
 
   <script>
@@ -92,11 +169,53 @@
     document.getElementById('url').value = localStorage.getItem('agy_url') || DEFAULT_URL;
     document.getElementById('secret').value = localStorage.getItem('agy_secret') || '';
 
-    function openPreview() {
-      const repo = document.getElementById('repo').value;
-      const baseUrl = (document.getElementById('url').value.trim() || DEFAULT_URL).replace(/\/chat\/?$/, '');
-      window.open(`${baseUrl}/preview/${repo}/`, '_blank');
+    const PROJECTS = [
+      { repo: 'AMPtech-Hub', stack: 'Android Mobile (SDK 36)', vis: 'Private', desc: 'AMPtech Hub Android app configured for Google Play Console compliance.' },
+      { repo: 'Atari-TV', stack: 'Android TV (Kotlin + C++ NDK)', vis: 'Private', desc: '10-foot Android TV Atari 2600 Console & ROM Shelf with CRT toggle & save slots.' },
+      { repo: 'River-Ride', stack: 'Android & Android TV', vis: 'Private', desc: 'Classic River Raid arcade game with automated Play Console internal staging.' },
+      { repo: 'price-tracker', stack: 'Android (Kotlin / Gradle KTS)', vis: 'Private', desc: 'PriceGuard / Price Tracker Android app with real-time price monitoring.' },
+      { repo: 'media-tracker', stack: 'Flutter + Web + Vertex AI', vis: 'Public', desc: '125+ cinema & prestige TV tracker with director importer & Vertex AI curator.' },
+      { repo: 'Mamali-IPTV', stack: 'Android TV & Mobile (v3.1)', vis: 'Private', desc: 'Mamali IPTV player for Android TV & mobile devices on Google Play Console.' },
+      { repo: 'SpeakConfidentTV', stack: 'React Native / Android TV', vis: 'Private', desc: 'Speech confidence coaching & teleprompter application for Android TV.' },
+      { repo: 'Home-Painting-Marketplace-', stack: 'Full-Stack Web Marketplace', vis: 'Private', desc: 'Marketplace connecting homeowners and painting contractors.' },
+      { repo: 'gcp-wif-foundation', stack: 'Terraform / GCP WIF', vis: 'Private', desc: 'Account-wide keyless GCP Workload Identity Federation foundation.' },
+      { repo: 'cloud-agy-orchestrator', stack: 'Cloud Run + FastAPI + Terraform', vis: 'Public', desc: 'Zero-Local-Compute Antigravity Cloud Orchestrator & Universal Preview Engine.' }
+    ];
+
+    function getBaseUrl() {
+      return (document.getElementById('url').value.trim() || DEFAULT_URL).replace(/\/chat\/?$/, '');
     }
+
+    function openPreview(repoName) {
+      const repo = repoName || document.getElementById('repo').value;
+      window.open(`${getBaseUrl()}/preview/${repo}/`, '_blank');
+    }
+
+    function selectRepo(repoName) {
+      document.getElementById('repo').value = repoName;
+      document.getElementById('prompt').focus();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function renderGrid() {
+      const base = getBaseUrl();
+      const grid = document.getElementById('projects-grid');
+      grid.innerHTML = PROJECTS.map(p => `
+        <div class="proj-card">
+          <div>
+            <h3>${p.repo} <span class="badge">${p.vis}</span></h3>
+            <div class="proj-meta">${p.stack}</div>
+            <div class="proj-desc">${p.desc}</div>
+          </div>
+          <div class="proj-actions">
+            <a class="btn-preview" href="${base}/preview/${p.repo}/" target="_blank">🌐 Preview</a>
+            <a class="btn-github" href="https://github.com/aminniktash2010/${p.repo}" target="_blank">GitHub</a>
+            <button style="background:#1e293b;color:#38bdf8;border:1px solid #38bdf8;" onclick="selectRepo('${p.repo}')">Prompt</button>
+          </div>
+        </div>
+      `).join('');
+    }
+    renderGrid();
 
     async function sendTask() {
       const url = document.getElementById('url').value.trim() || DEFAULT_URL;

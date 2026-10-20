@@ -41,6 +41,70 @@ GITHUB_PAT = os.environ.get("GITHUB_PAT", "")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 DRIVE_STATUS_FILE_ID = os.environ.get("DRIVE_STATUS_FILE_ID", "")
 GITHUB_OWNER = "aminniktash2010"
+CLOUD_RUN_BASE_URL = "https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app"
+
+ANTIGRAVITY_PROJECTS = [
+    {
+        "repo": "AMPtech-Hub",
+        "platform": "Android Mobile / Hub (SDK 36)",
+        "visibility": "Private",
+        "description": "AMPtech Hub Android application configured for Google Play Console compliance (compileSdk/targetSdk 36).",
+    },
+    {
+        "repo": "Atari-TV",
+        "platform": "Android TV (Kotlin + C++ Stella 2023 NDK & LibretroDroid)",
+        "visibility": "Private",
+        "description": "10-foot Android TV Atari 2600 Console & ROM Shelf with CRT shader toggle, 5-slot state picker, and Play Console internal track pipeline.",
+    },
+    {
+        "repo": "River-Ride",
+        "platform": "Android & Android TV",
+        "visibility": "Private",
+        "description": "Classic River Raid arcade edition for Android & Android TV with automated Play Console internal test staging.",
+    },
+    {
+        "repo": "price-tracker",
+        "platform": "Android (Kotlin / Gradle KTS)",
+        "visibility": "Private",
+        "description": "PriceGuard / Price Tracker Android app with real-time price monitoring and Play Console WIF deployment.",
+    },
+    {
+        "repo": "media-tracker",
+        "platform": "Web + Flutter (iOS/Android/Web) + Vertex AI Cloud Run",
+        "visibility": "Public",
+        "description": "Curated 125+ cinema & prestige TV tracker with director filmography importer, Flutter cross-platform app, and Vertex AI Gemini curator (`media-tracker-ai`).",
+    },
+    {
+        "repo": "Mamali-IPTV",
+        "platform": "Android TV & Mobile (v3.1)",
+        "visibility": "Private",
+        "description": "Mamali IPTV player for Android TV & mobile devices deployed to Google Play Console.",
+    },
+    {
+        "repo": "SpeakConfidentTV",
+        "platform": "React Native / Android TV",
+        "visibility": "Private",
+        "description": "React Native speech confidence coaching & teleprompter application designed for Android TV.",
+    },
+    {
+        "repo": "Home-Painting-Marketplace-",
+        "platform": "Full-Stack Web Marketplace",
+        "visibility": "Private",
+        "description": "Home Painting Marketplace connecting homeowners and painting contractors with automated quoting.",
+    },
+    {
+        "repo": "gcp-wif-foundation",
+        "platform": "Terraform / GCP IAM & Workload Identity Federation",
+        "visibility": "Private",
+        "description": "Account-wide keyless GCP Workload Identity Federation (`github-actions-pool`) and service account foundation.",
+    },
+    {
+        "repo": "cloud-agy-orchestrator",
+        "platform": "Cloud Run + FastAPI + Terraform + GitHub Pages PWA",
+        "visibility": "Public",
+        "description": "Zero-Local-Compute Antigravity Cloud Orchestrator, Universal Web Preview Engine, and 5TB Google Drive Vault bridge.",
+    },
+]
 
 HOT_WORKSPACE_ROOT = Path("/workspace")      # Tier 2: In-memory RAM disk (empty_dir)
 COLD_CACHE_ROOT = Path("/mnt/cache/repos")   # Tier 3: Persistent 5GB GCS bucket
@@ -163,15 +227,60 @@ def save_repo_snapshot(repo: str, repo_dir: Path):
     )
 
 
-def sync_status_to_5tb_drive(markdown_report: str):
+def build_master_portfolio_markdown(latest_activity_md: str = "") -> str:
+    """Builds the complete Antigravity Projects Catalog & Status Report for Gemini @Google Drive."""
+    now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    lines = [
+        "# 🚀 Amin's Antigravity Projects Portfolio & Live Cloud Status",
+        f"- **Last Synced:** `{now_str}`",
+        f"- **GitHub Owner:** [`{GITHUB_OWNER}`](https://github.com/{GITHUB_OWNER})",
+        f"- **Mobile/Web Control Center PWA:** [https://aminniktash2010.github.io/cloud-agy-orchestrator/](https://aminniktash2010.github.io/cloud-agy-orchestrator/)",
+        f"- **Cloud Run Orchestrator:** `{CLOUD_RUN_BASE_URL}`",
+        "",
+        "## 📱 Active Antigravity Projects (10 Repositories)",
+        "",
+        "| # | Project / Repo | Platform & Stack | Visibility | Live Browser Preview | GitHub Repo |",
+        "| :-: | :--- | :--- | :---: | :--- | :--- |",
+    ]
+    for idx, p in enumerate(ANTIGRAVITY_PROJECTS, start=1):
+        repo = p["repo"]
+        preview_url = f"{CLOUD_RUN_BASE_URL}/preview/{repo}/"
+        gh_url = f"https://github.com/{GITHUB_OWNER}/{repo}"
+        lines.append(
+            f"| {idx} | **{repo}**<br>_{p['description']}_ | {p['platform']} | `{p['visibility']}` | [Open Preview]({preview_url}) | [`{GITHUB_OWNER}/{repo}`]({gh_url}) |"
+        )
+
+    lines.extend([
+        "",
+        "---",
+        "",
+        "## 💬 How to Command Any Project from Gemini App",
+        "1. **Inspect Status in Gemini App:** Ask `@Google Drive What are my Antigravity projects in latest_build_status.md?`",
+        "2. **Trigger Code Generation via Web Chat PWA:** Open [https://aminniktash2010.github.io/cloud-agy-orchestrator/](https://aminniktash2010.github.io/cloud-agy-orchestrator/), choose any of the 10 projects above, and enter your prompt.",
+        "3. **Preview Before Play Console:** Open `https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app/preview/<Project-Name>/` in your browser before approving the `play-internal-test` gate on GitHub Mobile.",
+        "",
+    ])
+
+    if latest_activity_md:
+        lines.extend([
+            "---",
+            "",
+            latest_activity_md.strip(),
+            "",
+        ])
+    return "\n".join(lines)
+
+
+def sync_status_to_5tb_drive(markdown_report: str = ""):
     """Updates pre-created latest_build_status.md in your 5TB Google Drive (_AGY_Cloud_Vault)."""
     if not DRIVE_STATUS_FILE_ID:
         return "SKIPPED_NO_FILE_ID"
     try:
+        full_doc = build_master_portfolio_markdown(markdown_report)
         creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/drive"])
         drive_service = build("drive", "v3", credentials=creds)
         temp_report = Path("/tmp/latest_build_status.md")
-        temp_report.write_text(markdown_report, encoding="utf-8")
+        temp_report.write_text(full_doc, encoding="utf-8")
         media = MediaFileUpload(str(temp_report), mimetype="text/markdown", resumable=True)
         drive_service.files().update(fileId=DRIVE_STATUS_FILE_ID, media_body=media).execute()
         return "SYNCED_TO_5TB_DRIVE"
@@ -181,7 +290,32 @@ def sync_status_to_5tb_drive(markdown_report: str):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "agy-cloud-orchestrator"}
+    return {"status": "ok", "service": "agy-cloud-orchestrator", "projects_count": len(ANTIGRAVITY_PROJECTS)}
+
+
+@app.get("/projects")
+async def list_projects():
+    """Returns all Antigravity projects with their live preview URLs and metadata."""
+    enriched = []
+    for p in ANTIGRAVITY_PROJECTS:
+        repo = p["repo"]
+        preview_index = PREVIEWS_DIR / repo / "index.html"
+        enriched.append({
+            **p,
+            "github_url": f"https://github.com/{GITHUB_OWNER}/{repo}",
+            "preview_url": f"{CLOUD_RUN_BASE_URL}/preview/{repo}/",
+            "preview_ready": preview_index.exists(),
+        })
+    return {"owner": GITHUB_OWNER, "count": len(enriched), "projects": enriched}
+
+
+@app.post("/sync-drive")
+async def sync_drive_catalog(x_webhook_token: str = Header(None)):
+    """Syncs the full 10-project Antigravity portfolio to Google Drive (_AGY_Cloud_Vault/latest_build_status.md)."""
+    if WEBHOOK_SECRET and x_webhook_token != WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized webhook token")
+    status = sync_status_to_5tb_drive()
+    return {"status": status, "drive_file_id": DRIVE_STATUS_FILE_ID, "projects_synced": len(ANTIGRAVITY_PROJECTS)}
 
 
 @app.post("/upload-preview/{repo}")
@@ -200,7 +334,10 @@ async def upload_preview(repo: str, file: UploadFile = File(...), x_webhook_toke
         z.extractall(repo_dir)
 
     preview_url = f"https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app/preview/{repo}/"
-    return {"status": "success", "repo": repo, "preview_url": preview_url}
+    drive_sync = sync_status_to_5tb_drive(
+        f"## 🌐 Latest Preview Staged\n- **Repository:** `{GITHUB_OWNER}/{repo}`\n- **Live Preview URL:** [{preview_url}]({preview_url})"
+    )
+    return {"status": "success", "repo": repo, "preview_url": preview_url, "drive_sync": drive_sync}
 
 
 @app.post("/chat")
