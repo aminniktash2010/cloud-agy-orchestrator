@@ -31,5 +31,5 @@ variable "existing_service_account" {
 variable "drive_status_file_id" {
   type        = string
   description = "Optional File ID of pre-created latest_build_status.md in your 5TB Google Drive (_AGY_Cloud_Vault)"
-  default     = ""
+  default     = "1u9Amsa6Qrn1DWniicziQHw4wSTtfSaqP"
 }
