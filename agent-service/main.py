@@ -121,6 +121,7 @@ class ChatCommand(BaseModel):
     repo: str
     prompt: str
     branch: str = "main"
+    model: str = "gemini-3.8-flash-high"
     use_feature_branch: bool = False
 
 
@@ -382,8 +383,12 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
                 subprocess.run(["git", "checkout", "-b", target_branch], cwd=repo_dir, check=True)
 
             # Execute Antigravity CLI inside isolated per-repo session with auto-approved permissions
+            cmd_args = ["agy", "-p", cmd.prompt, "--dangerously-skip-permissions"]
+            if cmd.model:
+                cmd_args.extend(["--model", cmd.model])
+
             agy_proc = subprocess.run(
-                ["agy", "-p", cmd.prompt, "--dangerously-skip-permissions"],
+                cmd_args,
                 cwd=repo_dir,
                 env=isolated_env,
                 capture_output=True,
@@ -469,11 +474,15 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
                 yield sse_event("log", f"  ANTIGRAVITY CLOUD CLI SESSION\n")
                 yield sse_event("log", f"  Repository: {GITHUB_OWNER}/{cmd.repo}\n")
                 yield sse_event("log", f"  Branch:     {target_branch}\n")
+                yield sse_event("log", f"  Model:      {cmd.model}\n")
                 yield sse_event("log", f"  Cache Tier: {cache_tier}\n")
                 yield sse_event("log", f"  Task:       {cmd.prompt}\n")
                 yield sse_event("log", f"====================================================\n\n")
 
                 cmd_args = ["agy", "-p", cmd.prompt, "--dangerously-skip-permissions"]
+                if cmd.model:
+                    cmd_args.extend(["--model", cmd.model])
+
                 proc = await asyncio.create_subprocess_exec(
                     *cmd_args,
                     cwd=str(repo_dir),

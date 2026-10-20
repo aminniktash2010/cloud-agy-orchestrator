@@ -345,6 +345,14 @@
       <option value="cloud-agy-orchestrator">cloud-agy-orchestrator (Cloud Run Agent Orchestrator)</option>
     </select>
 
+    <label>Antigravity AI Model Engine</label>
+    <select id="model">
+      <option value="gemini-3.8-flash-high" selected>Gemini 3.8 Flash (High Reasoning) • Fast &amp; Reliable [Active Quota]</option>
+      <option value="gemini-3.8-flash-medium">Gemini 3.8 Flash (Medium) • Ultra-Fast</option>
+      <option value="gemini-3.8-flash-low">Gemini 3.8 Flash (Low) • Minimal Latency</option>
+      <option value="gemini-4-argon-medium">Gemini 4 Argon (Medium) • Pro Tier</option>
+    </select>
+
     <label>AI Architect &amp; CLI Backend Prompt</label>
     <textarea id="prompt" rows="3" placeholder="Describe the UI, feature, or update to build in Cloud Run for the selected project..."></textarea>
 
@@ -468,6 +476,7 @@
 
     async function sendTask() {
       const repo = document.getElementById('repo').value;
+      const model = document.getElementById('model').value;
       const prompt = document.getElementById('prompt').value.trim();
       const termBody = document.getElementById('terminal-body');
       const termStatus = document.getElementById('term-status');
@@ -483,7 +492,7 @@
       btnExec.disabled = true;
       btnExec.textContent = '⏳ Streaming Antigravity CLI Execution in Cloud Run...';
       termPulse.className = 'term-pulse pulse-running';
-      termStatus.textContent = `Connecting to ${repo}...`;
+      termStatus.textContent = `Connecting to ${repo} [${model}]...`;
       termBody.textContent = '';
       resCard.classList.remove('active');
       lastDoneData = null;
@@ -509,7 +518,7 @@
             'Content-Type': 'application/json',
             'x-webhook-token': 'agy-public-client'
           },
-          body: JSON.stringify({ repo, prompt, branch: 'main' })
+          body: JSON.stringify({ repo, prompt, model, branch: 'main' })
         });
 
         if (!response.ok) {
