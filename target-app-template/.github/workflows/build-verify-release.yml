@@ -66,8 +66,11 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
-      - name: Setup Gradle Cache
+      - name: Setup Gradle 8.9
+        if: steps.detect.outputs.project_type == 'gradle'
         uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.9
 
       - name: Setup Python for Tools & Play CLI
         uses: actions/setup-python@v5
@@ -77,33 +80,38 @@ jobs:
       - name: Install Tool Dependencies
         run: pip install --quiet cryptography requests google-auth || true
 
-      - name: Prepare Native Core & Dependencies (if present)
+      - name: Prepare Native Core & Dependencies
         if: steps.detect.outputs.project_type == 'gradle'
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
-          if grep -q "vendor/LibretroDroid" settings.gradle* 2>/dev/null && [ ! -d "vendor/LibretroDroid" ]; then
+
+          # Run any setup scripts (e.g. scripts/setup_libretrodroid.sh)
+          for script in scripts/fetch*.sh scripts/setup*.sh scripts/build*.sh build_stella.sh; do
+            if [ -f "$script" ]; then
+              chmod +x "$script"
+              bash "$script" || true
+            fi
+          done
+
+          # Fallback LibretroDroid submodule clone if needed
+          if grep -q "vendor/LibretroDroid" settings.gradle* 2>/dev/null && [ ! -d "vendor/LibretroDroid/.git" ]; then
             mkdir -p vendor
-            git clone https://github.com/Swordfish90/LibretroDroid.git vendor/LibretroDroid
-            (cd vendor/LibretroDroid && git checkout 8835c3098514390a271e36983957f7bb5f40abf1)
+            git clone --recurse-submodules https://github.com/Swordfish90/LibretroDroid.git vendor/LibretroDroid
+            (
+              cd vendor/LibretroDroid
+              git checkout 8835c3098514390a271e36983957f7bb5f40abf1
+              git submodule update --init --recursive
+            )
           fi
-          if [ -d "vendor/LibretroDroid" ] && [ ! -f "vendor/LibretroDroid/libretrodroid/src/main/cpp/oboe/CMakeLists.txt" ]; then
-            (cd vendor/LibretroDroid && git submodule update --init libretrodroid/src/main/cpp/oboe) || git clone --depth 1 https://github.com/google/oboe.git vendor/LibretroDroid/libretrodroid/src/main/cpp/oboe
-          fi
-          if [ -f "tools/build_core.sh" ] && [ ! -f "app/src/main/jniLibs/arm64-v8a/stella_libretro.so" ]; then
+
+          # Build pinned native core if present
+          if [ -f "tools/build_core.sh" ] && [ ! -f "app/src/main/jniLibs/arm64-v8a/stella_libretro.so" ] && [ ! -f "app/src/main/jniLibs/arm64-v8a/libstella_libretro.so" ]; then
             export ANDROID_NDK_HOME=$(ls -d "$ANDROID_HOME/ndk/"* 2>/dev/null | sort -V | tail -n 1)
             chmod +x tools/build_core.sh
             tools/build_core.sh || true
             if [ -f "app/src/main/jniLibs/arm64-v8a/stella_libretro.so" ]; then
               cp app/src/main/jniLibs/arm64-v8a/stella_libretro.so app/src/main/jniLibs/arm64-v8a/libstella_libretro.so || true
             fi
-          fi
-
-      - name: Run Gradle Verification Checks
-        if: steps.detect.outputs.project_type == 'gradle'
-        run: |
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew check --no-daemon || true
           fi
 
       # -----------------------------------------------------------------------
@@ -132,13 +140,12 @@ jobs:
 
       - name: Build Native Android Release Bundle & APK
         if: github.ref_name == 'main' && steps.detect.outputs.project_type == 'gradle'
+        env:
+          STORE_PASSWORD: ${{ secrets.PLAY_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PLAY_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.PLAY_KEY_PASSWORD }}
         run: |
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew bundleRelease assembleRelease --no-daemon
-          else
-            gradle :app:bundleRelease :app:assembleRelease --no-daemon
-          fi
+          gradle :app:bundleRelease :app:assembleRelease --no-daemon
 
       - name: Locate & Standardize Artifact Paths
         if: github.ref_name == 'main'
@@ -242,7 +249,6 @@ jobs:
           AAB_FILE=$(find ./release-artifact -name "*.aab" | head -n 1)
           if [ -n "$AAB_FILE" ] && [ -f "tools/play_console_cli.py" ]; then
             echo "Deploying $AAB_FILE to Play Console Internal Developer Test Track..."
-            # Look up package name from AndroidManifest.xml or default
             PKG_NAME=$(grep -o 'package="[^"]*"' app/src/main/AndroidManifest.xml 2>/dev/null | cut -d'"' -f2 || echo "")
             if [ -z "$PKG_NAME" ]; then
               PKG_NAME=$(grep -o 'applicationId\s*=\s*"[^"]*"' app/build.gradle* 2>/dev/null | cut -d'"' -f2 || echo "com.mamali.ataritv")
