@@ -3,10 +3,13 @@ import datetime
 import os
 import shutil
 import subprocess
+import io
+import zipfile
 from collections import defaultdict
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import google.auth
@@ -14,6 +17,16 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 app = FastAPI(title="Antigravity Cloud Orchestrator (Zero-Local-Compute)")
+
+# Previews directory in persistent 5GB GCS cache (or local fallback)
+PREVIEWS_DIR = Path("/mnt/cache/previews")
+try:
+    PREVIEWS_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    PREVIEWS_DIR = Path("/tmp/previews")
+    PREVIEWS_DIR.mkdir(parents=True, exist_ok=True)
+
+app.mount("/preview", StaticFiles(directory=str(PREVIEWS_DIR), html=True), name="previews")
 
 # Enable CORS so your GitHub Pages Chat PWA can call /chat directly
 app.add_middleware(
@@ -169,6 +182,25 @@ def sync_status_to_5tb_drive(markdown_report: str):
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "agy-cloud-orchestrator"}
+
+
+@app.post("/upload-preview/{repo}")
+async def upload_preview(repo: str, file: UploadFile = File(...), x_webhook_token: str = Header(None)):
+    """Receives a zipped web preview from CI and serves it at /preview/{repo}/."""
+    if WEBHOOK_SECRET and x_webhook_token != WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized webhook token")
+
+    repo_dir = PREVIEWS_DIR / repo
+    if repo_dir.exists():
+        shutil.rmtree(repo_dir)
+    repo_dir.mkdir(parents=True, exist_ok=True)
+
+    content = await file.read()
+    with zipfile.ZipFile(io.BytesIO(content)) as z:
+        z.extractall(repo_dir)
+
+    preview_url = f"https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app/preview/{repo}/"
+    return {"status": "success", "repo": repo, "preview_url": preview_url}
 
 
 @app.post("/chat")
