@@ -12,8 +12,3 @@ output "webhook_secret_id" {
   description = "Secret ID for Webhook Auth Secret"
   value       = google_secret_manager_secret.webhook_secret.secret_id
 }
-
-output "artifact_registry_repository" {
-  description = "Artifact Registry Docker repository URL"
-  value       = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.agent_repo.repository_id}"
-}
