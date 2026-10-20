@@ -219,7 +219,7 @@
       Fully Automated AI App Factory • Instant Browser &amp; In-App Previews • 1-Tap Google Play Console Staging
     </p>
 
-    <label>Select Antigravity Project (aminniktash2010 — All 10 Projects)</label>
+    <label>Target Project for CLI Backend Chat (aminniktash2010)</label>
     <select id="repo">
       <option value="AMPtech-Hub">AMPtech-Hub (Android TV &amp; Play Console Launcher • SDK 36)</option>
       <option value="Atari-TV">Atari-TV (Android TV Atari 2600 Emulator &amp; Shelf)</option>
@@ -233,16 +233,13 @@
       <option value="cloud-agy-orchestrator">cloud-agy-orchestrator (Cloud Run Agent Orchestrator)</option>
     </select>
 
-    <label>AI Architect &amp; Feature Prompt</label>
-    <textarea id="prompt" rows="4" placeholder="Describe the UI, feature, or update to build, preview, and stage for Google Play Console..."></textarea>
+    <label>AI Architect &amp; CLI Backend Prompt</label>
+    <textarea id="prompt" rows="4" placeholder="Describe the UI, feature, or update to build in Cloud Run for the selected project..."></textarea>
 
-    <div class="action-row">
-      <button onclick="sendTask()">⚡ Execute Automated Build in Cloud Run</button>
-      <button onclick="openPreview()" style="background: #1e293b; color: #38bdf8; border: 1px solid #38bdf8;">🌐 Preview Selected App In-Window</button>
-    </div>
-    <pre id="output">Ready. Select any project above and enter your prompt — no password or local compute needed.</pre>
+    <button onclick="sendTask()">⚡ Execute Automated Build in Cloud Run</button>
+    <pre id="output">Ready. Select any project above to chat with the CLI backend, or click 🌐 Preview on any app card below.</pre>
 
-    <h2>📱 All 10 Antigravity Projects Portfolio (Synced with Gemini App &amp; Play Console)</h2>
+    <h2>📱 All 10 Antigravity Projects Portfolio (Each Opens Its Own Live Preview)</h2>
     <div id="projects-grid" class="grid"></div>
   </div>
 
@@ -276,10 +273,10 @@
     ];
 
     function openPreview(repoName) {
-      const repo = repoName || document.getElementById('repo').value;
-      const previewUrl = `${CLOUD_RUN_BASE}/preview/${repo}/`;
-      document.getElementById('modal-title').textContent = `🌐 Live Interactive Preview: ${repo}`;
-      document.getElementById('modal-ext-link').href = previewUrl;
+      if (!repoName) return;
+      const previewUrl = `${CLOUD_RUN_BASE}/preview/${repoName}/?v=${Date.now()}`;
+      document.getElementById('modal-title').textContent = `🌐 Live Interactive Preview: ${repoName}`;
+      document.getElementById('modal-ext-link').href = `${CLOUD_RUN_BASE}/preview/${repoName}/`;
       document.getElementById('modal-iframe').src = previewUrl;
       document.getElementById('preview-modal').classList.add('active');
     }
