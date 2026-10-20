@@ -142,6 +142,23 @@ def build_isolated_env(repo_dir: Path) -> dict[str, str]:
     if base_mcp.exists() and not (config_dir / "mcp_config.json").exists():
         shutil.copy2(base_mcp, config_dir / "mcp_config.json")
 
+    # Populate Antigravity CLI OAuth credentials into the isolated session
+    cli_gemini_dir = session_home / ".gemini" / "antigravity-cli"
+    cli_gemini_dir.mkdir(parents=True, exist_ok=True)
+    target_token = cli_gemini_dir / "antigravity-oauth-token"
+
+    oauth_cache = Path("/mnt/cache/antigravity-oauth-token")
+    if oauth_cache.exists():
+        shutil.copy2(oauth_cache, target_token)
+    elif os.environ.get("AGY_OAUTH_TOKEN"):
+        target_token.write_text(os.environ["AGY_OAUTH_TOKEN"], encoding="utf-8")
+
+    # Also make token accessible to /root/.gemini if present
+    root_cli_dir = Path("/root/.gemini/antigravity-cli")
+    root_cli_dir.mkdir(parents=True, exist_ok=True)
+    if target_token.exists() and not (root_cli_dir / "antigravity-oauth-token").exists():
+        shutil.copy2(target_token, root_cli_dir / "antigravity-oauth-token")
+
     env = os.environ.copy()
     env["HOME"] = str(session_home)
     env["XDG_CONFIG_HOME"] = str(session_home / ".config")
@@ -328,6 +345,20 @@ async def upload_preview(repo: str, file: UploadFile = File(...), x_webhook_toke
         f"## 🌐 Latest Preview Staged\n- **Repository:** `{GITHUB_OWNER}/{repo}`\n- **Live Preview URL:** [{preview_url}]({preview_url})"
     )
     return {"status": "success", "repo": repo, "preview_url": preview_url, "drive_sync": drive_sync}
+
+
+class TokenSyncRequest(BaseModel):
+    token: str
+
+
+@app.post("/sync-token")
+async def sync_token(req: TokenSyncRequest, x_webhook_token: str = Header(None)):
+    """Receives and stores Antigravity OAuth credentials onto persistent GCS cache."""
+    if WEBHOOK_SECRET and x_webhook_token != WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized webhook token")
+    target = Path("/mnt/cache/antigravity-oauth-token")
+    target.write_text(req.token, encoding="utf-8")
+    return {"status": "success", "message": "Antigravity OAuth token cached in persistent GCS."}
 
 
 @app.post("/chat")

@@ -29,6 +29,16 @@ jobs:
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
+      - name: Sync Antigravity OAuth Token to Persistent Cache Bucket
+        if: ${{ env.HAS_AGY_TOKEN == 'true' }}
+        env:
+          HAS_AGY_TOKEN: ${{ secrets.AGY_OAUTH_TOKEN != '' }}
+          TOKEN_CONTENT: ${{ secrets.AGY_OAUTH_TOKEN }}
+        run: |
+          echo "$TOKEN_CONTENT" > /tmp/antigravity-oauth-token
+          gcloud storage cp /tmp/antigravity-oauth-token gs://project-51459e90-fbb3-471f-9f9-agy-repo-cache/antigravity-oauth-token || true
+          rm -f /tmp/antigravity-oauth-token
+
       - name: Build & Push Slim Container Image (~95MB) with BuildKit Layer Cache
         run: |
           echo "${{ steps.gcp-auth.outputs.access_token }}" | docker login -u oauth2accesstoken --password-stdin https://us-central1-docker.pkg.dev
