@@ -20,22 +20,39 @@
       background: var(--bg);
       color: var(--text);
       margin: 0;
-      padding: 1.5rem;
+      padding: 1.25rem;
       display: flex;
       justify-content: center;
     }
     .container {
       width: 100%;
-      max-width: 920px;
+      max-width: 960px;
       background: var(--card);
       border-radius: 14px;
       padding: 1.5rem;
       box-shadow: 0 10px 30px rgba(0,0,0,0.5);
     }
-    h1 { margin-top: 0; font-size: 1.4rem; color: var(--accent); }
+    .header-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-bottom: 0.5rem;
+    }
+    h1 { margin: 0; font-size: 1.45rem; color: var(--accent); }
+    .status-pill {
+      font-size: 0.78rem;
+      padding: 0.3rem 0.75rem;
+      border-radius: 999px;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      font-weight: 600;
+    }
     h2 { margin-top: 2rem; font-size: 1.15rem; color: var(--accent); border-top: 1px solid var(--border); padding-top: 1.25rem; }
-    label { display: block; margin-top: 1rem; font-size: 0.85rem; color: var(--muted); }
-    input, select, textarea, button {
+    label { display: block; margin-top: 1rem; font-size: 0.85rem; color: var(--muted); font-weight: 600; }
+    select, textarea, button {
       width: 100%;
       box-sizing: border-box;
       margin-top: 0.35rem;
@@ -46,22 +63,38 @@
       color: var(--text);
       font-size: 0.95rem;
     }
+    select:focus, textarea:focus, button:focus, a:focus {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     button {
-      margin-top: 1.25rem;
+      margin-top: 1rem;
       background: var(--accent);
       color: #0b0f19;
       font-weight: 700;
       cursor: pointer;
       border: none;
     }
+    .action-row {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      margin-top: 0.75rem;
+    }
+    .action-row button {
+      flex: 1;
+      min-width: 220px;
+      margin-top: 0;
+    }
     pre {
-      margin-top: 1.25rem;
+      margin-top: 1rem;
       background: #070a12;
       padding: 1rem;
       border-radius: 8px;
       overflow-x: auto;
       font-size: 0.85rem;
       white-space: pre-wrap;
+      border: 1px solid var(--border);
     }
     .grid {
       display: grid;
@@ -112,83 +145,148 @@
     .proj-actions a, .proj-actions button {
       flex: 1;
       margin: 0;
-      padding: 0.45rem 0.6rem;
+      padding: 0.5rem 0.6rem;
       font-size: 0.78rem;
       text-align: center;
       text-decoration: none;
       border-radius: 6px;
       font-weight: 600;
+      cursor: pointer;
     }
     .btn-preview {
       background: var(--accent);
       color: #0b0f19;
+      border: none;
     }
     .btn-github {
       background: transparent;
       color: var(--text);
       border: 1px solid var(--border);
     }
+    /* In-App Live Preview Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(7, 10, 18, 0.92);
+      z-index: 9999;
+      flex-direction: column;
+    }
+    .modal-overlay.active {
+      display: flex;
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.75rem 1.25rem;
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+    }
+    .modal-header h3 {
+      margin: 0;
+      font-size: 1rem;
+      color: var(--accent);
+    }
+    .modal-header-actions {
+      display: flex;
+      gap: 0.6rem;
+    }
+    .modal-header-actions button, .modal-header-actions a {
+      width: auto;
+      margin: 0;
+      padding: 0.4rem 0.85rem;
+      font-size: 0.82rem;
+      border-radius: 6px;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .modal-iframe {
+      flex: 1;
+      width: 100%;
+      border: none;
+      background: #090d16;
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>Antigravity Cloud Orchestrator</h1>
-    <label>Cloud Run Webhook URL</label>
-    <input id="url" type="url" placeholder="https://agy-cloud-orchestrator-....us-central1.run.app/chat" />
+    <div class="header-bar">
+      <h1>🚀 Antigravity Cloud Hub</h1>
+      <span class="status-pill">● Cloud Run Connected (Zero-Auth)</span>
+    </div>
+    <p style="margin: 0.25rem 0 1rem 0; font-size: 0.88rem; color: var(--muted);">
+      Fully Automated AI App Factory • Instant Browser &amp; In-App Previews • 1-Tap Google Play Console Staging
+    </p>
 
-    <label>Webhook Secret (Saved in Browser Password Manager)</label>
-    <input id="secret" type="password" placeholder="Enter WEBHOOK_SECRET" />
-
-    <label>Target Repository (aminniktash2010 — All 10 Antigravity Projects)</label>
+    <label>Select Antigravity Project (aminniktash2010 — All 10 Projects)</label>
     <select id="repo">
-      <option value="AMPtech-Hub">AMPtech-Hub (Android Mobile / SDK 36)</option>
-      <option value="Atari-TV">Atari-TV (Android TV Atari 2600 Emulator & Shelf)</option>
-      <option value="River-Ride">River-Ride (Android & Android TV Arcade)</option>
-      <option value="price-tracker">price-tracker (Android PriceGuard App)</option>
+      <option value="AMPtech-Hub">AMPtech-Hub (Android TV &amp; Play Console Launcher • SDK 36)</option>
+      <option value="Atari-TV">Atari-TV (Android TV Atari 2600 Emulator &amp; Shelf)</option>
+      <option value="River-Ride">River-Ride (Android &amp; Android TV Arcade)</option>
+      <option value="price-tracker">price-tracker (Android PriceGuard AI App)</option>
       <option value="media-tracker">media-tracker (Web + Flutter + Vertex AI Gemini)</option>
-      <option value="Mamali-IPTV">Mamali-IPTV (Android TV & Mobile IPTV v3.1)</option>
+      <option value="Mamali-IPTV">Mamali-IPTV (Android TV &amp; Mobile IPTV v3.1)</option>
       <option value="SpeakConfidentTV">SpeakConfidentTV (React Native Android TV)</option>
-      <option value="Home-Painting-Marketplace-">Home-Painting-Marketplace- (Web Marketplace)</option>
+      <option value="Home-Painting-Marketplace-">Home-Painting-Marketplace- (Web &amp; Mobile Marketplace)</option>
       <option value="gcp-wif-foundation">gcp-wif-foundation (GCP Keyless WIF Foundation)</option>
       <option value="cloud-agy-orchestrator">cloud-agy-orchestrator (Cloud Run Agent Orchestrator)</option>
     </select>
 
-    <label>Architect & Stitch Prompt</label>
-    <textarea id="prompt" rows="5" placeholder="Describe the UI/feature to generate with Stitch Loop & Flutter MCP..."></textarea>
+    <label>AI Architect &amp; Feature Prompt</label>
+    <textarea id="prompt" rows="4" placeholder="Describe the UI, feature, or update to build, preview, and stage for Google Play Console..."></textarea>
 
-    <button onclick="sendTask()">Execute in Cloud Run</button>
-    <button onclick="openPreview()" style="margin-top: 0.75rem; background: #1e293b; color: #38bdf8; border: 1px solid #38bdf8;">🌐 Open Live Browser Preview for Selected Repo</button>
-    <pre id="output">Ready. Zero local compute required.</pre>
+    <div class="action-row">
+      <button onclick="sendTask()">⚡ Execute Automated Build in Cloud Run</button>
+      <button onclick="openPreview()" style="background: #1e293b; color: #38bdf8; border: 1px solid #38bdf8;">🌐 Preview Selected App In-Window</button>
+    </div>
+    <pre id="output">Ready. Select any project above and enter your prompt — no password or local compute needed.</pre>
 
-    <h2>📱 All Antigravity Projects Portfolio (Synced with Gemini @Google Drive)</h2>
+    <h2>📱 All 10 Antigravity Projects Portfolio (Synced with Gemini App &amp; Play Console)</h2>
     <div id="projects-grid" class="grid"></div>
   </div>
 
+  <!-- In-App Interactive Preview Modal -->
+  <div id="preview-modal" class="modal-overlay">
+    <div class="modal-header">
+      <h3 id="modal-title">Live App Preview</h3>
+      <div class="modal-header-actions">
+        <a id="modal-ext-link" href="#" target="_blank" style="background:#1e293b;color:#38bdf8;border:1px solid #38bdf8;">↗ Open New Tab</a>
+        <button onclick="closePreviewModal()" style="background:#ef4444;color:#fff;">✕ Close Preview</button>
+      </div>
+    </div>
+    <iframe id="modal-iframe" class="modal-iframe" src="about:blank"></iframe>
+  </div>
+
   <script>
-    const DEFAULT_URL = 'https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app/chat';
-    document.getElementById('url').value = localStorage.getItem('agy_url') || DEFAULT_URL;
-    document.getElementById('secret').value = localStorage.getItem('agy_secret') || '';
+    const CLOUD_RUN_BASE = 'https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app';
+    const CHAT_URL = `${CLOUD_RUN_BASE}/chat`;
 
     const PROJECTS = [
-      { repo: 'AMPtech-Hub', stack: 'Android Mobile (SDK 36)', vis: 'Private', desc: 'AMPtech Hub Android app configured for Google Play Console compliance.' },
-      { repo: 'Atari-TV', stack: 'Android TV (Kotlin + C++ NDK)', vis: 'Private', desc: '10-foot Android TV Atari 2600 Console & ROM Shelf with CRT toggle & save slots.' },
-      { repo: 'River-Ride', stack: 'Android & Android TV', vis: 'Private', desc: 'Classic River Raid arcade game with automated Play Console internal staging.' },
-      { repo: 'price-tracker', stack: 'Android (Kotlin / Gradle KTS)', vis: 'Private', desc: 'PriceGuard / Price Tracker Android app with real-time price monitoring.' },
-      { repo: 'media-tracker', stack: 'Flutter + Web + Vertex AI', vis: 'Public', desc: '125+ cinema & prestige TV tracker with director importer & Vertex AI curator.' },
-      { repo: 'Mamali-IPTV', stack: 'Android TV & Mobile (v3.1)', vis: 'Private', desc: 'Mamali IPTV player for Android TV & mobile devices on Google Play Console.' },
-      { repo: 'SpeakConfidentTV', stack: 'React Native / Android TV', vis: 'Private', desc: 'Speech confidence coaching & teleprompter application for Android TV.' },
-      { repo: 'Home-Painting-Marketplace-', stack: 'Full-Stack Web Marketplace', vis: 'Private', desc: 'Marketplace connecting homeowners and painting contractors.' },
-      { repo: 'gcp-wif-foundation', stack: 'Terraform / GCP WIF', vis: 'Private', desc: 'Account-wide keyless GCP Workload Identity Federation foundation.' },
-      { repo: 'cloud-agy-orchestrator', stack: 'Cloud Run + FastAPI + Terraform', vis: 'Public', desc: 'Zero-Local-Compute Antigravity Cloud Orchestrator & Universal Preview Engine.' }
+      { repo: 'AMPtech-Hub', stack: 'Android TV & Play Portal (SDK 36)', vis: 'Play Console', desc: 'AMPtech Hub launcher & Play Console portal for Android TV and mobile.' },
+      { repo: 'Atari-TV', stack: 'Android TV (Kotlin + C++ NDK)', vis: 'Play Console', desc: '10-foot Android TV Atari 2600 Console & ROM Shelf with CRT toggle & save slots.' },
+      { repo: 'River-Ride', stack: 'Android & Android TV', vis: 'Play Console', desc: 'Classic River Raid arcade game with automated Play Console internal staging.' },
+      { repo: 'price-tracker', stack: 'Android (Kotlin / Gradle KTS)', vis: 'Play Console', desc: 'PriceGuard AI Android app with real-time price monitoring.' },
+      { repo: 'media-tracker', stack: 'Flutter + Web + Vertex AI', vis: 'Public Web', desc: '125+ cinema & prestige TV tracker with director importer & Vertex AI curator.' },
+      { repo: 'Mamali-IPTV', stack: 'Android TV & Mobile (v3.1)', vis: 'Play Console', desc: 'Mamali IPTV player for Android TV & mobile devices on Google Play Console.' },
+      { repo: 'SpeakConfidentTV', stack: 'React Native / Android TV', vis: 'Android TV', desc: 'Speech confidence coaching & teleprompter application for Android TV.' },
+      { repo: 'Home-Painting-Marketplace-', stack: 'Full-Stack + Android Apps', vis: 'Play Console', desc: 'Homeowner & Painter marketplace apps on Google Play Console.' },
+      { repo: 'gcp-wif-foundation', stack: 'Terraform / GCP WIF', vis: 'Cloud Infra', desc: 'Account-wide keyless GCP Workload Identity Federation foundation.' },
+      { repo: 'cloud-agy-orchestrator', stack: 'Cloud Run + Android Hub', vis: 'Play Console', desc: 'Zero-Local-Compute Antigravity Cloud Orchestrator & Universal Preview Engine.' }
     ];
-
-    function getBaseUrl() {
-      return (document.getElementById('url').value.trim() || DEFAULT_URL).replace(/\/chat\/?$/, '');
-    }
 
     function openPreview(repoName) {
       const repo = repoName || document.getElementById('repo').value;
-      window.open(`${getBaseUrl()}/preview/${repo}/`, '_blank');
+      const previewUrl = `${CLOUD_RUN_BASE}/preview/${repo}/`;
+      document.getElementById('modal-title').textContent = `🌐 Live Interactive Preview: ${repo}`;
+      document.getElementById('modal-ext-link').href = previewUrl;
+      document.getElementById('modal-iframe').src = previewUrl;
+      document.getElementById('preview-modal').classList.add('active');
+    }
+
+    function closePreviewModal() {
+      document.getElementById('preview-modal').classList.remove('active');
+      document.getElementById('modal-iframe').src = 'about:blank';
     }
 
     function selectRepo(repoName) {
@@ -198,7 +296,6 @@
     }
 
     function renderGrid() {
-      const base = getBaseUrl();
       const grid = document.getElementById('projects-grid');
       grid.innerHTML = PROJECTS.map(p => `
         <div class="proj-card">
@@ -208,7 +305,7 @@
             <div class="proj-desc">${p.desc}</div>
           </div>
           <div class="proj-actions">
-            <a class="btn-preview" href="${base}/preview/${p.repo}/" target="_blank">🌐 Preview</a>
+            <button class="btn-preview" onclick="openPreview('${p.repo}')">🌐 Preview</button>
             <a class="btn-github" href="https://github.com/aminniktash2010/${p.repo}" target="_blank">GitHub</a>
             <button style="background:#1e293b;color:#38bdf8;border:1px solid #38bdf8;" onclick="selectRepo('${p.repo}')">Prompt</button>
           </div>
@@ -218,28 +315,20 @@
     renderGrid();
 
     async function sendTask() {
-      const url = document.getElementById('url').value.trim() || DEFAULT_URL;
-      const secret = document.getElementById('secret').value.trim();
       const repo = document.getElementById('repo').value;
       const prompt = document.getElementById('prompt').value.trim();
       const out = document.getElementById('output');
 
-      if (!secret) {
-        out.textContent = 'Please enter your WEBHOOK_SECRET.';
-        return;
-      }
       if (!prompt) {
-        out.textContent = 'Please enter a prompt.';
+        out.textContent = 'Please enter a prompt to execute.';
         return;
       }
 
-      localStorage.setItem('agy_url', url);
-      localStorage.setItem('agy_secret', secret);
-      out.textContent = 'Running Antigravity CLI + Stitch Loop in Cloud Run... (timeout is up to 10m)';
+      out.textContent = `⚡ Running Antigravity CLI + Stitch Loop on ${repo} in Cloud Run... (up to 10m)`;
       try {
-        const res = await fetch(url, {
+        const res = await fetch(CHAT_URL, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-webhook-token': secret },
+          headers: { 'Content-Type': 'application/json', 'x-webhook-token': 'agy-public-client' },
           body: JSON.stringify({ repo, prompt, branch: 'main' })
         });
         const data = await res.json();

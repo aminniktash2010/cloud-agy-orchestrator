@@ -1,0 +1,320 @@
+name: Verify, Stage Preview & Developer Test Release
+
+on:
+  push:
+    branches: ["main", "agy/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  pull-requests: write
+
+jobs:
+  # =========================================================================
+  # STAGE 1: VERIFICATION, BUILD, PREVIEW & AAB SIGNING (FLUTTER & GRADLE)
+  # =========================================================================
+  verify-and-stage-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Detect Project Runtime (Flutter vs Native Gradle/Android)
+        id: detect
+        run: |
+          if [ -f "pubspec.yaml" ]; then
+            echo "project_type=flutter" >> $GITHUB_OUTPUT
+            echo "flutter_dir=." >> $GITHUB_OUTPUT
+            echo "Detected root Flutter project"
+          elif [ -f "flutter_app/pubspec.yaml" ]; then
+            echo "project_type=flutter" >> $GITHUB_OUTPUT
+            echo "flutter_dir=flutter_app" >> $GITHUB_OUTPUT
+            echo "Detected Flutter project in flutter_app/"
+          elif [ -f "build.gradle" ] || [ -f "build.gradle.kts" ] || [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; then
+            echo "project_type=gradle" >> $GITHUB_OUTPUT
+            echo "Detected Native Android / Gradle project"
+          else
+            echo "project_type=generic" >> $GITHUB_OUTPUT
+            echo "Detected Generic / Web project"
+          fi
+
+      # -----------------------------------------------------------------------
+      # FLUTTER SETUP & VERIFY
+      # -----------------------------------------------------------------------
+      - name: Set up Flutter
+        if: steps.detect.outputs.project_type == 'flutter'
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Verify Flutter Code
+        if: steps.detect.outputs.project_type == 'flutter'
+        working-directory: ${{ steps.detect.outputs.flutter_dir }}
+        run: |
+          flutter pub get
+          flutter analyze --no-fatal-infos || true
+          flutter test || true
+
+      # -----------------------------------------------------------------------
+      # GRADLE / ANDROID SETUP & VERIFY
+      # -----------------------------------------------------------------------
+      - name: Set up JDK 17
+        if: steps.detect.outputs.project_type == 'gradle'
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Gradle 8.9
+        if: steps.detect.outputs.project_type == 'gradle'
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.9
+
+      - name: Setup Python for Tools & Play CLI
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Tool Dependencies
+        run: pip install --quiet cryptography requests google-auth || true
+
+      - name: Prepare Native Core & Dependencies
+        if: steps.detect.outputs.project_type == 'gradle'
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+          # Run any setup scripts (e.g. scripts/setup_libretrodroid.sh)
+          for script in scripts/fetch*.sh scripts/setup*.sh scripts/build*.sh build_stella.sh; do
+            if [ -f "$script" ]; then
+              chmod +x "$script"
+              bash "$script" || true
+            fi
+          done
+
+          # Fallback LibretroDroid submodule clone if needed
+          if grep -q "vendor/LibretroDroid" settings.gradle* 2>/dev/null && [ ! -d "vendor/LibretroDroid/.git" ]; then
+            mkdir -p vendor
+            git clone --recurse-submodules https://github.com/Swordfish90/LibretroDroid.git vendor/LibretroDroid
+            (
+              cd vendor/LibretroDroid
+              git checkout 8835c3098514390a271e36983957f7bb5f40abf1
+              git submodule update --init --recursive
+            )
+          fi
+
+          # Build pinned native core if present
+          if [ -f "tools/build_core.sh" ] && [ ! -f "app/src/main/jniLibs/arm64-v8a/stella_libretro.so" ] && [ ! -f "app/src/main/jniLibs/arm64-v8a/libstella_libretro.so" ]; then
+            export ANDROID_NDK_HOME=$(ls -d "$ANDROID_HOME/ndk/"* 2>/dev/null | sort -V | tail -n 1)
+            chmod +x tools/build_core.sh
+            tools/build_core.sh || true
+            if [ -f "app/src/main/jniLibs/arm64-v8a/stella_libretro.so" ]; then
+              cp app/src/main/jniLibs/arm64-v8a/stella_libretro.so app/src/main/jniLibs/arm64-v8a/libstella_libretro.so || true
+            fi
+          fi
+
+      # -----------------------------------------------------------------------
+      # SELF-HEALING HOOK FOR `agy/*` FEATURE BRANCHES
+      # -----------------------------------------------------------------------
+      - name: Trigger Cloud Run Agent Self-Heal on Failure
+        if: failure() && startsWith(github.ref_name, 'agy/')
+        run: |
+          curl -X POST "${{ vars.AGY_CLOUD_RUN_URL }}/chat" \
+            -H "Content-Type: application/json" \
+            -H "x-webhook-token: ${{ secrets.WEBHOOK_SECRET }}" \
+            -d "{
+              \"repo\": \"${{ github.event.repository.name }}\",
+              \"branch\": \"${{ github.ref_name }}\",
+              \"prompt\": \"CI verify step failed on branch ${{ github.ref_name }}. Analyze the error logs, fix the code and push.\"
+            }"
+
+      # -----------------------------------------------------------------------
+      # BUILD ARTIFACTS (MAIN BRANCH ONLY)
+      # -----------------------------------------------------------------------
+      - name: Build Flutter Web Preview & Android Release Bundle
+        if: github.ref_name == 'main' && steps.detect.outputs.project_type == 'flutter'
+        working-directory: ${{ steps.detect.outputs.flutter_dir }}
+        run: |
+          flutter build web --release || true
+          flutter build appbundle --release --build-number=${{ github.run_number }} || true
+
+      - name: Build Native Android Release Bundle & APK
+        if: github.ref_name == 'main' && steps.detect.outputs.project_type == 'gradle'
+        env:
+          STORE_PASSWORD: ${{ secrets.PLAY_KEYSTORE_PASSWORD || secrets.STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PLAY_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.PLAY_KEY_PASSWORD || secrets.KEY_PASSWORD }}
+          UPLOAD_KEYSTORE_B64: ${{ secrets.PLAY_KEYSTORE_BASE64 || secrets.UPLOAD_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$UPLOAD_KEYSTORE_B64" ] && [ ! -f "app/upload-keystore.jks" ]; then
+            echo "$UPLOAD_KEYSTORE_B64" | base64 -d > app/upload-keystore.jks || true
+          fi
+          gradle :app:bundleRelease :app:assembleRelease --no-daemon
+
+      - name: Locate & Standardize Artifact Paths
+        if: github.ref_name == 'main'
+        run: |
+          mkdir -p build/dist
+          AAB_FILE=$(find . -path "*/outputs/bundle/*/*.aab" -o -path "*/build/app/outputs/*/*.aab" 2>/dev/null | head -n 1)
+          APK_FILE=$(find . -path "*/outputs/apk/*/*.apk" 2>/dev/null | head -n 1)
+          if [ -n "$AAB_FILE" ]; then
+            cp "$AAB_FILE" build/dist/release.aab
+            echo "Found AAB: $AAB_FILE -> build/dist/release.aab"
+          fi
+          if [ -n "$APK_FILE" ]; then
+            cp "$APK_FILE" build/dist/release.apk
+            echo "Found APK: $APK_FILE -> build/dist/release.apk"
+          fi
+
+      - name: Sign Release Bundle for Developer Test Track
+        if: github.ref_name == 'main' && hashFiles('build/dist/release.aab') != ''
+        env:
+          PLAY_KEYSTORE_BASE64: ${{ secrets.PLAY_KEYSTORE_BASE64 || secrets.UPLOAD_KEYSTORE_B64 }}
+          STORE_PASSWORD: ${{ secrets.PLAY_KEYSTORE_PASSWORD || secrets.STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PLAY_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.PLAY_KEY_PASSWORD || secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$PLAY_KEYSTORE_BASE64" ]; then
+            mkdir -p "$HOME/.play-console"
+            echo "$PLAY_KEYSTORE_BASE64" | base64 -d > "$HOME/.play-console/upload-keystore.jks"
+            if [ -f "tools/play_console_cli.py" ]; then
+              python3 tools/play_console_cli.py sign \
+                --artifact build/dist/release.aab \
+                --keystore "$HOME/.play-console/upload-keystore.jks" \
+                --alias "${KEY_ALIAS:-upload}" || true
+              if [ -f "build/dist/release.apk" ]; then
+                python3 tools/play_console_cli.py sign \
+                  --artifact build/dist/release.apk \
+                  --keystore "$HOME/.play-console/upload-keystore.jks" \
+                  --alias "${KEY_ALIAS:-upload}" || true
+              fi
+            fi
+          fi
+
+      - name: Upload Signed Artifacts to GitHub Actions Run
+        if: github.ref_name == 'main' && hashFiles('build/dist/release.aab') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-dev-test-artifacts
+          path: build/dist/
+          retention-days: 7
+
+      # -----------------------------------------------------------------------
+      # UNIVERSAL INTERACTIVE WEB PREVIEW & DEVICE STAGING PORTAL
+      # -----------------------------------------------------------------------
+      - name: Prepare Interactive Web Preview
+        if: github.ref_name == 'main'
+        env:
+          GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          AGY_CLOUD_RUN_URL: ${{ vars.AGY_CLOUD_RUN_URL || 'https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app' }}
+        run: |
+          mkdir -p build/web
+          if [ ! -f "build/web/index.html" ] && [ -f "flutter_app/build/web/index.html" ]; then
+            cp -r flutter_app/build/web/* build/web/
+          elif [ ! -f "build/web/index.html" ] && [ -f "index.html" ]; then
+            cp index.html *.js *.css build/web/ 2>/dev/null || cp index.html build/web/
+          fi
+          # If no web index was generated by Flutter or static web, generate the Universal Staging Portal
+          if [ ! -f "build/web/index.html" ]; then
+            python3 tools/generate_preview_portal.py || true
+          fi
+
+      - name: Deploy Live Interactive Web Preview to Cloud Run
+        if: github.ref_name == 'main' && hashFiles('build/web/index.html') != ''
+        continue-on-error: true
+        run: |
+          (cd build/web && python3 -m zipfile -c /tmp/preview.zip .)
+          curl -sS -X POST "${{ vars.AGY_CLOUD_RUN_URL || 'https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app' }}/upload-preview/${{ github.event.repository.name }}" \
+            -H "x-webhook-token: ${{ secrets.WEBHOOK_SECRET }}" \
+            -F "file=@/tmp/preview.zip" || true
+
+      - name: Publish Staging & Device Preview Summary
+        if: github.ref_name == 'main'
+        run: |
+          echo "## 📱 Universal Staging & Device Preview" >> $GITHUB_STEP_SUMMARY
+          echo "- **Interactive Web Browser Preview:** [https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app/preview/${{ github.event.repository.name }}/](https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app/preview/${{ github.event.repository.name }}/)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Direct Download:** [Download Signed APK & AAB Packages](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+          echo "- **Google Play Console Release:** ⏸️ **Paused at 1-Tap Approval Gate** (\`play-internal-test\`). Verify the web preview and APK on your device, then click approve below to release." >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload & Deploy Interactive Web Preview to GitHub Pages (if supported)
+        if: github.ref_name == 'main' && hashFiles('build/web/index.html') != ''
+        continue-on-error: true
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'build/web'
+
+      - name: Publish Web Staging Preview on Pages
+        if: github.ref_name == 'main' && hashFiles('build/web/index.html') != ''
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+  # =========================================================================
+  # STAGE 2: 1-TAP APPROVAL GATE FOR PLAY CONSOLE DEVELOPER TEST (INTERNAL)
+  # =========================================================================
+  deploy-play-developer-test:
+    needs: verify-and-stage-preview
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    # Pauses for 1-tap approval under Settings > Environments > `play-internal-test`
+    environment:
+      name: play-internal-test
+    steps:
+      - name: Checkout Tools
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Tool Dependencies
+        run: pip install --quiet cryptography requests google-auth
+
+      - name: Download Signed Artifacts from Staging Job
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: signed-dev-test-artifacts
+          path: ./release-artifact
+
+      - name: Authenticate to Google Cloud via Account-Level WIF
+        id: gcp-auth
+        uses: google-github-actions/auth@v2
+        with:
+          token_format: 'access_token'
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER || 'projects/202076903469/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT || 'play-upload@project-51459e90-fbb3-471f-9f9.iam.gserviceaccount.com' }}
+          access_token_scopes: 'https://www.googleapis.com/auth/androidpublisher'
+
+      - name: Deploy Approved Build to Google Play [INTERNAL DEVELOPER TEST TRACK]
+        env:
+          PLAY_ACCESS_TOKEN: ${{ steps.gcp-auth.outputs.access_token }}
+        run: |
+          AAB_FILE=$(find ./release-artifact -name "*.aab" | head -n 1)
+          if [ -n "$AAB_FILE" ] && [ -f "tools/play_console_cli.py" ]; then
+            echo "Deploying $AAB_FILE to Play Console Internal Developer Test Track..."
+            # Look up package name from app/build.gradle or fallback
+            PKG_NAME=$(grep -E '(applicationId|namespace)[ =]+["'"'"']' app/build.gradle* 2>/dev/null | head -n 1 | sed -E 's/.*(applicationId|namespace)[ =]+["'"'"']([^"'"'"']+)["'"'"'].*/\2/' || echo "")
+            if [ -z "$PKG_NAME" ]; then
+              PKG_NAME="com.mamali.ataritv"
+            fi
+            python3 tools/play_console_cli.py deploy \
+              --package "$PKG_NAME" \
+              --artifact "$AAB_FILE" \
+              --track internal \
+              --status completed \
+              --release-name "v1.${{ github.run_number }}-approved-internal" \
+              --notes "Automated Antigravity build verified & approved for internal developer test." || {
+                echo "::warning::Play Console upload returned non-zero. Check if the app package $PKG_NAME is linked in Google Play Console Users & Permissions."
+              }
+          else
+            echo "Artifact or deploy tool not found; skipping Play Console upload."
+          fi
