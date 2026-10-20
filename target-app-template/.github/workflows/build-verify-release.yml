@@ -249,9 +249,10 @@ jobs:
           AAB_FILE=$(find ./release-artifact -name "*.aab" | head -n 1)
           if [ -n "$AAB_FILE" ] && [ -f "tools/play_console_cli.py" ]; then
             echo "Deploying $AAB_FILE to Play Console Internal Developer Test Track..."
-            PKG_NAME=$(grep -o 'package="[^"]*"' app/src/main/AndroidManifest.xml 2>/dev/null | cut -d'"' -f2 || echo "")
+            # Look up package name from app/build.gradle or fallback
+            PKG_NAME=$(grep -E '(applicationId|namespace)[ =]+["'"'"']' app/build.gradle* 2>/dev/null | head -n 1 | sed -E 's/.*(applicationId|namespace)[ =]+["'"'"']([^"'"'"']+)["'"'"'].*/\2/' || echo "")
             if [ -z "$PKG_NAME" ]; then
-              PKG_NAME=$(grep -o 'applicationId\s*=\s*"[^"]*"' app/build.gradle* 2>/dev/null | cut -d'"' -f2 || echo "com.mamali.ataritv")
+              PKG_NAME="com.mamali.ataritv"
             fi
             python3 tools/play_console_cli.py deploy \
               --package "$PKG_NAME" \
