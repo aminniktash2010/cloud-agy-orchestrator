@@ -14,6 +14,8 @@
       --muted: #94a3b8;
       --border: #2e3a52;
       --success: #10b981;
+      --error: #ef4444;
+      --warning: #f59e0b;
     }
     body {
       font-family: system-ui, -apple-system, sans-serif;
@@ -49,6 +51,9 @@
       color: var(--success);
       border: 1px solid rgba(16, 185, 129, 0.35);
       font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
     }
     h2 { margin-top: 2rem; font-size: 1.15rem; color: var(--accent); border-top: 1px solid var(--border); padding-top: 1.25rem; }
     label { display: block; margin-top: 1rem; font-size: 0.85rem; color: var(--muted); font-weight: 600; }
@@ -74,28 +79,134 @@
       font-weight: 700;
       cursor: pointer;
       border: none;
+      transition: opacity 0.2s;
     }
-    .action-row {
-      display: flex;
-      gap: 0.75rem;
-      flex-wrap: wrap;
-      margin-top: 0.75rem;
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
     }
-    .action-row button {
-      flex: 1;
-      min-width: 220px;
-      margin-top: 0;
-    }
-    pre {
-      margin-top: 1rem;
-      background: #070a12;
-      padding: 1rem;
-      border-radius: 8px;
-      overflow-x: auto;
-      font-size: 0.85rem;
-      white-space: pre-wrap;
+
+    /* Terminal Console */
+    .terminal-container {
+      margin-top: 1.25rem;
       border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      background: #060911;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
     }
+    .terminal-header {
+      background: #0f1626;
+      padding: 0.6rem 0.9rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8rem;
+    }
+    .terminal-title {
+      font-weight: 600;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .terminal-controls {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .term-btn {
+      background: #1e293b;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      padding: 0.2rem 0.55rem;
+      font-size: 0.72rem;
+      border-radius: 5px;
+      cursor: pointer;
+      width: auto;
+      margin: 0;
+    }
+    .term-btn:hover {
+      color: var(--text);
+      border-color: var(--accent);
+    }
+    .terminal-body {
+      padding: 1rem;
+      height: 320px;
+      max-height: 460px;
+      overflow-y: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 0.82rem;
+      line-height: 1.5;
+      color: #cbd5e1;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .term-line-system {
+      color: #38bdf8;
+      font-weight: 600;
+      display: block;
+    }
+    .term-line-error {
+      color: #f87171;
+      font-weight: 600;
+      display: block;
+    }
+    .term-pulse {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 0.4; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.2); }
+      100% { opacity: 0.4; transform: scale(0.9); }
+    }
+    .pulse-running {
+      background: #38bdf8 !important;
+    }
+    .pulse-error {
+      background: #ef4444 !important;
+      animation: none !important;
+    }
+
+    /* Result Banner */
+    .result-card {
+      margin-top: 0.75rem;
+      padding: 0.85rem 1rem;
+      background: rgba(56, 189, 248, 0.08);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      border-radius: 8px;
+      display: none;
+      font-size: 0.84rem;
+    }
+    .result-card.active {
+      display: block;
+    }
+    .result-card-actions {
+      margin-top: 0.6rem;
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .result-card-actions button, .result-card-actions a {
+      width: auto;
+      margin: 0;
+      padding: 0.45rem 0.85rem;
+      font-size: 0.8rem;
+      border-radius: 6px;
+      text-decoration: none;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    /* Project Cards Grid */
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -163,6 +274,7 @@
       color: var(--text);
       border: 1px solid var(--border);
     }
+
     /* In-App Live Preview Modal */
     .modal-overlay {
       display: none;
@@ -213,10 +325,10 @@
   <div class="container">
     <div class="header-bar">
       <h1>🚀 Antigravity Cloud Hub</h1>
-      <span class="status-pill">● Cloud Run Connected (Zero-Auth)</span>
+      <span class="status-pill"><span class="term-pulse"></span> Cloud Run Connected (Zero-Auth)</span>
     </div>
     <p style="margin: 0.25rem 0 1rem 0; font-size: 0.88rem; color: var(--muted);">
-      Fully Automated AI App Factory • Instant Browser &amp; In-App Previews • 1-Tap Google Play Console Staging
+      Fully Automated AI App Factory • Live Streaming CLI Terminal • Instant Previews • Google Play Console Staging
     </p>
 
     <label>Target Project for CLI Backend Chat (aminniktash2010)</label>
@@ -234,10 +346,34 @@
     </select>
 
     <label>AI Architect &amp; CLI Backend Prompt</label>
-    <textarea id="prompt" rows="4" placeholder="Describe the UI, feature, or update to build in Cloud Run for the selected project..."></textarea>
+    <textarea id="prompt" rows="3" placeholder="Describe the UI, feature, or update to build in Cloud Run for the selected project..."></textarea>
 
-    <button onclick="sendTask()">⚡ Execute Automated Build in Cloud Run</button>
-    <pre id="output">Ready. Select any project above to chat with the CLI backend, or click 🌐 Preview on any app card below.</pre>
+    <button id="btn-execute" onclick="sendTask()">⚡ Execute Automated Build in Cloud Run (Live CLI Stream)</button>
+
+    <!-- Terminal Console Window -->
+    <div class="terminal-container">
+      <div class="terminal-header">
+        <div class="terminal-title">
+          <span id="term-pulse" class="term-pulse"></span>
+          <span id="term-status">Terminal Ready • Real-Time Stream</span>
+        </div>
+        <div class="terminal-controls">
+          <button class="term-btn" id="btn-autoscroll" onclick="toggleAutoScroll()">Scroll: ON</button>
+          <button class="term-btn" onclick="clearTerminal()">Clear</button>
+        </div>
+      </div>
+      <div id="terminal-body" class="terminal-body">Select a project and enter a prompt above, then click Execute to watch the Antigravity CLI work in real time.</div>
+    </div>
+
+    <!-- Done Banner Card -->
+    <div id="result-card" class="result-card">
+      <div id="result-summary" style="font-weight: 600; margin-bottom: 0.35rem;">✓ Build Completed Successfully</div>
+      <div id="result-meta" style="color: var(--muted); font-size: 0.8rem;"></div>
+      <div class="result-card-actions">
+        <button id="btn-open-result-preview" class="btn-preview" onclick="openResultPreview()">🌐 Open Live Preview</button>
+        <a id="link-github-commit" class="btn-github" href="#" target="_blank">↗ View GitHub Commit</a>
+      </div>
+    </div>
 
     <h2>📱 All 10 Antigravity Projects Portfolio (Each Opens Its Own Live Preview)</h2>
     <div id="projects-grid" class="grid"></div>
@@ -257,7 +393,10 @@
 
   <script>
     const CLOUD_RUN_BASE = 'https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app';
-    const CHAT_URL = `${CLOUD_RUN_BASE}/chat`;
+    const STREAM_URL = `${CLOUD_RUN_BASE}/chat/stream`;
+
+    let autoScroll = true;
+    let lastDoneData = null;
 
     const PROJECTS = [
       { repo: 'AMPtech-Hub', stack: 'Android TV & Play Portal (SDK 36)', vis: 'Play Console', desc: 'AMPtech Hub launcher & Play Console portal for Android TV and mobile.' },
@@ -272,6 +411,16 @@
       { repo: 'cloud-agy-orchestrator', stack: 'Cloud Run + Android Hub', vis: 'Play Console', desc: 'Zero-Local-Compute Antigravity Cloud Orchestrator & Universal Preview Engine.' }
     ];
 
+    function toggleAutoScroll() {
+      autoScroll = !autoScroll;
+      document.getElementById('btn-autoscroll').textContent = `Scroll: ${autoScroll ? 'ON' : 'OFF'}`;
+    }
+
+    function clearTerminal() {
+      document.getElementById('terminal-body').textContent = '';
+      document.getElementById('result-card').classList.remove('active');
+    }
+
     function openPreview(repoName) {
       if (!repoName) return;
       const previewUrl = `${CLOUD_RUN_BASE}/preview/${repoName}/?v=${Date.now()}`;
@@ -279,6 +428,12 @@
       document.getElementById('modal-ext-link').href = `${CLOUD_RUN_BASE}/preview/${repoName}/`;
       document.getElementById('modal-iframe').src = previewUrl;
       document.getElementById('preview-modal').classList.add('active');
+    }
+
+    function openResultPreview() {
+      if (lastDoneData && lastDoneData.repo) {
+        openPreview(lastDoneData.repo);
+      }
     }
 
     function closePreviewModal() {
@@ -314,25 +469,126 @@
     async function sendTask() {
       const repo = document.getElementById('repo').value;
       const prompt = document.getElementById('prompt').value.trim();
-      const out = document.getElementById('output');
+      const termBody = document.getElementById('terminal-body');
+      const termStatus = document.getElementById('term-status');
+      const termPulse = document.getElementById('term-pulse');
+      const btnExec = document.getElementById('btn-execute');
+      const resCard = document.getElementById('result-card');
 
       if (!prompt) {
-        out.textContent = 'Please enter a prompt to execute.';
+        alert('Please enter a prompt describing what to build.');
         return;
       }
 
-      out.textContent = `⚡ Running Antigravity CLI + Stitch Loop on ${repo} in Cloud Run... (up to 10m)`;
+      btnExec.disabled = true;
+      btnExec.textContent = '⏳ Streaming Antigravity CLI Execution in Cloud Run...';
+      termPulse.className = 'term-pulse pulse-running';
+      termStatus.textContent = `Connecting to ${repo}...`;
+      termBody.textContent = '';
+      resCard.classList.remove('active');
+      lastDoneData = null;
+
+      function appendText(txt, className) {
+        if (className) {
+          const span = document.createElement('span');
+          span.className = className;
+          span.textContent = txt;
+          termBody.appendChild(span);
+        } else {
+          termBody.appendChild(document.createTextNode(txt));
+        }
+        if (autoScroll) {
+          termBody.scrollTop = termBody.scrollHeight;
+        }
+      }
+
       try {
-        const res = await fetch(CHAT_URL, {
+        const response = await fetch(STREAM_URL, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-webhook-token': 'agy-public-client' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-webhook-token': 'agy-public-client'
+          },
           body: JSON.stringify({ repo, prompt, branch: 'main' })
         });
-        const data = await res.json();
-        out.textContent = JSON.stringify(data, null, 2);
+
+        if (!response.ok) {
+          throw new Error(`Cloud Run HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        termStatus.textContent = `Live Streaming Antigravity CLI (${repo})...`;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const messages = buffer.split('\n\n');
+          buffer = messages.pop(); // save incomplete line
+
+          for (const rawMsg of messages) {
+            const trimmed = rawMsg.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            try {
+              const payload = JSON.parse(trimmed.slice(5).trim());
+              if (payload.type === 'status') {
+                termStatus.textContent = payload.data;
+                appendText(`\n[STATUS] ${payload.data}\n`, 'term-line-system');
+              } else if (payload.type === 'log') {
+                appendText(payload.data);
+              } else if (payload.type === 'done') {
+                termPulse.className = 'term-pulse';
+                termStatus.textContent = '✓ Build & Commit Finished';
+                lastDoneData = payload.data;
+                showDoneBanner(payload.data);
+              } else if (payload.type === 'error') {
+                termPulse.className = 'term-pulse pulse-error';
+                termStatus.textContent = '✕ Error Encountered';
+                appendText(`\n[ERROR] ${payload.data}\n`, 'term-line-error');
+              }
+            } catch (err) {
+              console.error('Error parsing SSE data chunk:', err, trimmed);
+            }
+          }
+        }
       } catch (err) {
-        out.textContent = 'Error: ' + err.message;
+        termPulse.className = 'term-pulse pulse-error';
+        termStatus.textContent = '✕ Stream Disconnected';
+        appendText(`\n[STREAM ERROR] ${err.message}\n`, 'term-line-error');
+      } finally {
+        btnExec.disabled = false;
+        btnExec.textContent = '⚡ Execute Automated Build in Cloud Run (Live CLI Stream)';
       }
+    }
+
+    function showDoneBanner(data) {
+      const resCard = document.getElementById('result-card');
+      const resSummary = document.getElementById('result-summary');
+      const resMeta = document.getElementById('result-meta');
+      const ghLink = document.getElementById('link-github-commit');
+
+      resSummary.textContent = data.changes_pushed
+        ? `✓ Changes Pushed to GitHub: ${data.github_repo || data.repo} [${data.branch}]`
+        : `✓ Working Tree Clean: ${data.github_repo || data.repo} [${data.branch}]`;
+
+      resMeta.innerHTML = `
+        <strong>Commit:</strong> ${data.commit ? data.commit.slice(0, 7) : 'None'} • 
+        <strong>Cache Tier:</strong> ${data.cache_tier || 'WARM'} • 
+        <strong>5TB Drive:</strong> ${data.drive_sync || 'Synced'}
+      `;
+
+      if (data.commit) {
+        ghLink.href = `https://github.com/aminniktash2010/${data.repo}/commit/${data.commit}`;
+        ghLink.style.display = 'inline-flex';
+      } else {
+        ghLink.href = `https://github.com/aminniktash2010/${data.repo}`;
+      }
+
+      resCard.classList.add('active');
     }
   </script>
 </body>

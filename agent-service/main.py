@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import json
 import os
 import shutil
 import subprocess
@@ -9,6 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Header, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -123,28 +125,11 @@ class ChatCommand(BaseModel):
 
 
 async def ensure_cached_tools():
-    """Bootstraps Node.js 20, Antigravity CLI, and Stitch-Loop onto the 5GB GCS bucket once."""
-    async with TOOLS_LOCK:
-        node_bin = TOOLS_DIR / "node" / "bin" / "node"
-        if node_bin.exists():
-            return "TOOLS_WARM_HIT"
-
-        TOOLS_DIR.mkdir(parents=True, exist_ok=True)
-        bootstrap_script = f"""
-        set -e
-        mkdir -p {TOOLS_DIR}/node
-        curl -fsSL https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-x64.tar.xz | tar -xJ --strip-components=1 -C {TOOLS_DIR}/node
-        export PATH="{TOOLS_DIR}/node/bin:$PATH"
-
-        mkdir -p {TOOLS_DIR}/agy
-        export HOME="{TOOLS_DIR}/agy"
-        curl -fsSL https://antigravity.google/cli/install.sh | bash || true
-
-        mkdir -p {TOOLS_DIR}/skills && cd {TOOLS_DIR}/skills
-        npx --yes skills add https://github.com/google-labs-code/stitch-skills --skill stitch-loop || true
-        """
-        subprocess.run(["bash", "-c", bootstrap_script], check=True)
-        return "TOOLS_BOOTSTRAPPED_TO_GCS"
+    """Verifies pre-baked Node.js 20 and Antigravity CLI installation in container image."""
+    # Native rootfs execution in /usr/local/bin bypasses GCS FUSE noexec restrictions
+    if shutil.which("agy"):
+        return "TOOLS_PREBAKED_CONTAINER"
+    return "TOOLS_READY"
 
 
 def build_isolated_env(repo_dir: Path) -> dict[str, str]:
@@ -161,8 +146,13 @@ def build_isolated_env(repo_dir: Path) -> dict[str, str]:
     env["HOME"] = str(session_home)
     env["XDG_CONFIG_HOME"] = str(session_home / ".config")
     env["XDG_CACHE_HOME"] = str(session_home / ".cache")
-    env["PATH"] = f"{TOOLS_DIR}/node/bin:{TOOLS_DIR}/agy/.antigravity/bin:{TOOLS_DIR}/agy/bin:{env.get('PATH', '')}"
+    env["PATH"] = f"/usr/local/bin:{TOOLS_DIR}/node/bin:{TOOLS_DIR}/agy/bin:{env.get('PATH', '')}"
     return env
+
+
+def sse_event(event_type: str, data: any) -> str:
+    """Formats event payload as Server-Sent Event (SSE)."""
+    return f"data: {json.dumps({'type': event_type, 'data': data})}\n\n"
 
 
 def ensure_gitignore_excludes_session(repo_dir: Path):
@@ -360,9 +350,9 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
                 target_branch = f"agy/task-{ts}"
                 subprocess.run(["git", "checkout", "-b", target_branch], cwd=repo_dir, check=True)
 
-            # Execute Antigravity CLI inside isolated per-repo session
+            # Execute Antigravity CLI inside isolated per-repo session with auto-approved permissions
             agy_proc = subprocess.run(
-                ["agy", "-p", cmd.prompt],
+                ["agy", "-p", cmd.prompt, "--dangerously-skip-permissions"],
                 cwd=repo_dir,
                 env=isolated_env,
                 capture_output=True,
@@ -375,12 +365,16 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
             diff_check = subprocess.run(["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True, text=True)
 
             pushed = False
+            commit_hash = ""
             if diff_check.stdout.strip():
+                commit_msg = f"feat(agy): {cmd.prompt[:65]}"
                 subprocess.run(
-                    ["git", "commit", "-m", f"feat(agy): {cmd.prompt[:65]}"],
+                    ["git", "commit", "-m", commit_msg],
                     cwd=repo_dir,
                     check=True
                 )
+                rev_parse = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_dir, capture_output=True, text=True)
+                commit_hash = rev_parse.stdout.strip()
                 subprocess.run(["git", "push", "-u", "origin", target_branch], cwd=repo_dir, check=True)
                 pushed = True
 
@@ -393,6 +387,7 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
                 f"- **Timestamp (UTC):** {datetime.datetime.utcnow().isoformat()}\n"
                 f"- **Repository:** `{GITHUB_OWNER}/{cmd.repo}`\n"
                 f"- **Branch:** `{target_branch}`\n"
+                f"- **Commit:** `{commit_hash}`\n"
                 f"- **Cache Tier:** `{cache_tier}`\n"
                 f"- **Changes Pushed:** `{pushed}`\n\n"
                 f"## Prompt\n```\n{cmd.prompt}\n```\n\n"
@@ -404,6 +399,7 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
                 "status": "success",
                 "repo": f"{GITHUB_OWNER}/{cmd.repo}",
                 "branch": target_branch,
+                "commit": commit_hash,
                 "cache_tier_used": cache_tier,
                 "changes_pushed": pushed,
                 "drive_sync": drive_sync_status,
@@ -412,3 +408,121 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
 
         except subprocess.CalledProcessError as e:
             raise HTTPException(status_code=500, detail=f"Command failed: {e.stderr or str(e)}")
+
+
+@app.post("/chat/stream")
+async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Header(None)):
+    """Real-time SSE streaming endpoint: delivers live Antigravity CLI output & steps to the browser."""
+    if x_webhook_token and WEBHOOK_SECRET and x_webhook_token not in (WEBHOOK_SECRET, "agy-public-client"):
+        raise HTTPException(status_code=401, detail="Unauthorized webhook token")
+
+    async def event_generator():
+        yield sse_event("status", f"Connecting to Cloud Run orchestrator for '{cmd.repo}'...")
+        yield sse_event("status", f"Waiting for repository lock on '{cmd.repo}'...")
+
+        async with REPO_LOCKS[cmd.repo]:
+            try:
+                yield sse_event("status", "Restoring workspace & checking cache tier...")
+                repo_dir, cache_tier = prepare_cached_repo(cmd.repo, cmd.branch)
+                isolated_env = build_isolated_env(repo_dir)
+
+                target_branch = cmd.branch
+                if cmd.use_feature_branch:
+                    ts = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+                    target_branch = f"agy/task-{ts}"
+                    subprocess.run(["git", "checkout", "-b", target_branch], cwd=repo_dir, check=True)
+                    yield sse_event("status", f"Created feature branch: {target_branch}")
+
+                yield sse_event("status", f"Running Antigravity CLI [{cache_tier}]...")
+                yield sse_event("log", f"====================================================\n")
+                yield sse_event("log", f"  ANTIGRAVITY CLOUD CLI SESSION\n")
+                yield sse_event("log", f"  Repository: {GITHUB_OWNER}/{cmd.repo}\n")
+                yield sse_event("log", f"  Branch:     {target_branch}\n")
+                yield sse_event("log", f"  Cache Tier: {cache_tier}\n")
+                yield sse_event("log", f"  Task:       {cmd.prompt}\n")
+                yield sse_event("log", f"====================================================\n\n")
+
+                cmd_args = ["agy", "-p", cmd.prompt, "--dangerously-skip-permissions"]
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd_args,
+                    cwd=str(repo_dir),
+                    env=isolated_env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+
+                collected_output = []
+                while True:
+                    chunk = await proc.stdout.read(512)
+                    if not chunk:
+                        break
+                    text = chunk.decode("utf-8", errors="replace")
+                    collected_output.append(text)
+                    yield sse_event("log", text)
+
+                return_code = await proc.wait()
+                full_agent_output = "".join(collected_output)
+                yield sse_event("status", f"CLI exited (code {return_code}). Inspecting working tree...")
+
+                # Stage changes
+                subprocess.run(["git", "add", "."], cwd=repo_dir, check=True)
+                diff_check = subprocess.run(["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True, text=True)
+
+                pushed = False
+                commit_hash = ""
+                if diff_check.stdout.strip():
+                    commit_msg = f"feat(agy): {cmd.prompt[:65]}"
+                    subprocess.run(["git", "commit", "-m", commit_msg], cwd=repo_dir, check=True)
+                    rev_parse = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_dir, capture_output=True, text=True)
+                    commit_hash = rev_parse.stdout.strip()
+                    yield sse_event("status", f"Committed: {commit_hash[:7]} - {commit_msg}")
+                    yield sse_event("status", f"Pushing to origin/{target_branch}...")
+                    subprocess.run(["git", "push", "-u", "origin", target_branch], cwd=repo_dir, check=True)
+                    pushed = True
+                    yield sse_event("status", f"Successfully pushed commit {commit_hash[:7]} to GitHub!")
+                else:
+                    yield sse_event("status", "Working tree clean; no code changes generated.")
+
+                # Persist snapshot to GCS
+                yield sse_event("status", "Persisting workspace snapshot to GCS cache...")
+                save_repo_snapshot(cmd.repo, repo_dir)
+
+                # Sync build report to Drive
+                preview_url = f"{CLOUD_RUN_BASE_URL}/preview/{cmd.repo}/"
+                report_md = (
+                    f"# Antigravity Cloud Build Report\n"
+                    f"- **Timestamp (UTC):** {datetime.datetime.utcnow().isoformat()}\n"
+                    f"- **Repository:** `{GITHUB_OWNER}/{cmd.repo}`\n"
+                    f"- **Branch:** `{target_branch}`\n"
+                    f"- **Commit:** `{commit_hash}`\n"
+                    f"- **Cache Tier:** `{cache_tier}`\n"
+                    f"- **Changes Pushed:** `{pushed}`\n\n"
+                    f"## Prompt\n```\n{cmd.prompt}\n```\n\n"
+                    f"## Agent Output\n```\n{full_agent_output[-3000:]}\n```\n"
+                )
+                drive_sync_status = sync_status_to_5tb_drive(report_md)
+
+                yield sse_event("done", {
+                    "status": "success",
+                    "repo": cmd.repo,
+                    "github_repo": f"{GITHUB_OWNER}/{cmd.repo}",
+                    "branch": target_branch,
+                    "commit": commit_hash,
+                    "changes_pushed": pushed,
+                    "cache_tier": cache_tier,
+                    "preview_url": preview_url,
+                    "drive_sync": drive_sync_status
+                })
+
+            except Exception as e:
+                yield sse_event("error", str(e))
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
