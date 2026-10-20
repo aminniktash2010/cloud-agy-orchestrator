@@ -20,6 +20,15 @@ A **100% Cloud-Native, Zero-Local-Compute, $0.00/month Free-Tier** mobile & web 
 
 ---
 
+## Live Endpoints
+
+- **Web Chat PWA:** [https://aminniktash2010.github.io/cloud-agy-orchestrator/](https://aminniktash2010.github.io/cloud-agy-orchestrator/)
+- **Cloud Run Service:** `https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app`
+- **Health Check:** `https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app/health`
+- **Agent Chat Endpoint:** `POST https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app/chat` (Header: `x-webhook-token: <WEBHOOK_SECRET>`)
+
+---
+
 ## Step-by-Step Implementation Guide
 
 ### Step 1: Create & Push This Repository
