@@ -83,6 +83,7 @@
     <textarea id="prompt" rows="5" placeholder="Describe the UI/feature to generate with Stitch Loop & Flutter MCP..."></textarea>
 
     <button onclick="sendTask()">Execute in Cloud Run</button>
+    <button onclick="openPreview()" style="margin-top: 0.75rem; background: #1e293b; color: #38bdf8; border: 1px solid #38bdf8;">🌐 Open Live Browser Preview for Selected Repo</button>
     <pre id="output">Ready. Zero local compute required.</pre>
   </div>
 
@@ -90,6 +91,12 @@
     const DEFAULT_URL = 'https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app/chat';
     document.getElementById('url').value = localStorage.getItem('agy_url') || DEFAULT_URL;
     document.getElementById('secret').value = localStorage.getItem('agy_secret') || '';
+
+    function openPreview() {
+      const repo = document.getElementById('repo').value;
+      const baseUrl = (document.getElementById('url').value.trim() || DEFAULT_URL).replace(/\/chat\/?$/, '');
+      window.open(`${baseUrl}/preview/${repo}/`, '_blank');
+    }
 
     async function sendTask() {
       const url = document.getElementById('url').value.trim() || DEFAULT_URL;
