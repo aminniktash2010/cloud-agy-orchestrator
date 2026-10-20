@@ -74,7 +74,9 @@
     <select id="repo">
       <option value="Atari-TV">Atari-TV</option>
       <option value="River-Ride">River-Ride</option>
-      <option value="PriceGuard-AI">PriceGuard-AI</option>
+      <option value="price-tracker">price-tracker</option>
+      <option value="Mamali-IPTV">Mamali-IPTV</option>
+      <option value="SpeakConfidentTV">SpeakConfidentTV</option>
     </select>
 
     <label>Architect & Stitch Prompt</label>
@@ -85,15 +87,29 @@
   </div>
 
   <script>
-    document.getElementById('url').value = localStorage.getItem('agy_url') || '';
+    const DEFAULT_URL = 'https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app/chat';
+    document.getElementById('url').value = localStorage.getItem('agy_url') || DEFAULT_URL;
+    document.getElementById('secret').value = localStorage.getItem('agy_secret') || '';
+
     async function sendTask() {
-      const url = document.getElementById('url').value.trim();
+      const url = document.getElementById('url').value.trim() || DEFAULT_URL;
       const secret = document.getElementById('secret').value.trim();
       const repo = document.getElementById('repo').value;
       const prompt = document.getElementById('prompt').value.trim();
       const out = document.getElementById('output');
+
+      if (!secret) {
+        out.textContent = 'Please enter your WEBHOOK_SECRET.';
+        return;
+      }
+      if (!prompt) {
+        out.textContent = 'Please enter a prompt.';
+        return;
+      }
+
       localStorage.setItem('agy_url', url);
-      out.textContent = 'Running Antigravity CLI + Stitch Loop in Cloud Run...';
+      localStorage.setItem('agy_secret', secret);
+      out.textContent = 'Running Antigravity CLI + Stitch Loop in Cloud Run... (timeout is up to 10m)';
       try {
         const res = await fetch(url, {
           method: 'POST',
