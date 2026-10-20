@@ -30,7 +30,6 @@ jobs:
       - name: Build & Push Slim Container Image (~95MB) with BuildKit Layer Cache
         run: |
           gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
-          gcloud artifacts repositories create agy-agent-repo --repository-format=docker --location=us-central1 || true
           IMAGE_URI="us-central1-docker.pkg.dev/project-51459e90-fbb3-471f-9f9/agy-agent-repo/agy-orchestrator:latest"
           docker pull $IMAGE_URI || true
           docker build --cache-from $IMAGE_URI -t $IMAGE_URI ./agent-service
@@ -48,6 +47,10 @@ jobs:
   deploy-chat-pwa:
     needs: deploy-infra
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

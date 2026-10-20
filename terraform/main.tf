@@ -13,47 +13,14 @@ provider "google" {
   region  = var.region
 }
 
-# 1. Enable Required Google Cloud APIs
-resource "google_project_service" "apis" {
-  for_each = toset([
-    "run.googleapis.com",
-    "artifactregistry.googleapis.com",
-    "secretmanager.googleapis.com",
-    "cloudbuild.googleapis.com",
-    "drive.googleapis.com",
-    "storage.googleapis.com"
-  ])
-  service            = each.key
-  disable_on_destroy = false
-}
-
-# 2. Artifact Registry (~95 MB Slim Container + Strict 500MB Free Tier Cleanup Guardrail)
-resource "google_artifact_registry_repository" "agent_repo" {
+# 1. Artifact Registry Reference (Pre-created agy-agent-repo in us-central1)
+data "google_artifact_registry_repository" "agent_repo" {
   location      = var.region
   repository_id = "agy-agent-repo"
-  description   = "Slim Docker repository for Antigravity Cloud Orchestrator"
-  format        = "DOCKER"
-
-  cleanup_policies {
-    id     = "delete-untagged-images"
-    action = "DELETE"
-    condition {
-      tag_state = "UNTAGGED"
-    }
-  }
-
-  cleanup_policies {
-    id     = "keep-only-latest-version"
-    action = "KEEP"
-    most_recent_versions {
-      keep_count = 1
-    }
-  }
-
-  depends_on = [google_project_service.apis]
+  project       = var.project_id
 }
 
-# 3. Persistent 5GB Free Tier Cloud Storage Bucket for Tools (Node/AGY/Stitch) & Repo Snapshots (.tar.zst)
+# 2. Persistent 5GB Free Tier Cloud Storage Bucket for Tools & Repo Snapshots (.tar.zst)
 resource "google_storage_bucket" "agent_cache" {
   name                        = "${var.project_id}-agy-repo-cache"
   location                    = var.region
@@ -69,8 +36,6 @@ resource "google_storage_bucket" "agent_cache" {
       type = "Delete"
     }
   }
-
-  depends_on = [google_project_service.apis]
 }
 
 resource "google_storage_bucket_iam_member" "cache_sa_access" {
@@ -79,7 +44,7 @@ resource "google_storage_bucket_iam_member" "cache_sa_access" {
   member = "serviceAccount:${var.existing_service_account}"
 }
 
-# 4. Secure Key Vault (Google Secret Manager - 3 Secrets = Well Under 6 Free Active Versions)
+# 3. Secure Key Vault (Reference existing secrets created in Secret Manager)
 locals {
   secrets = toset([
     "GEMINI_API_KEY",
@@ -88,33 +53,20 @@ locals {
   ])
 }
 
-resource "google_secret_manager_secret" "vault" {
+data "google_secret_manager_secret" "vault" {
   for_each  = local.secrets
   secret_id = each.key
-  replication {
-    auto {}
-  }
-  depends_on = [google_project_service.apis]
-}
-
-resource "google_secret_manager_secret_version" "vault_placeholder" {
-  for_each    = local.secrets
-  secret      = google_secret_manager_secret.vault[each.key].id
-  secret_data = "CHANGE_ME_IN_GCP_CONSOLE"
-
-  lifecycle {
-    ignore_changes = [secret_data]
-  }
+  project   = var.project_id
 }
 
 resource "google_secret_manager_secret_iam_member" "sa_secret_access" {
   for_each  = local.secrets
-  secret_id = google_secret_manager_secret.vault[each.key].id
+  secret_id = data.google_secret_manager_secret.vault[each.key].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${var.existing_service_account}"
 }
 
-# 5. Deploy Cloud Run v2 Service with Dual Volumes (Hot RAM Disk + Cold GCS Cache)
+# 4. Deploy Cloud Run v2 Service with Dual Volumes (Hot RAM Disk + Cold GCS Cache)
 resource "google_cloud_run_v2_service" "agy_service" {
   name     = var.service_name
   location = var.region
@@ -129,16 +81,7 @@ resource "google_cloud_run_v2_service" "agy_service" {
       max_instance_count = 2
     }
 
-    # Tier 2: Hot In-Memory RAM Disk for isolated Git & AGY operations
-    volumes {
-      name = "hot-workspace"
-      empty_dir {
-        medium     = "MEMORY"
-        size_limit = "1Gi"
-      }
-    }
-
-    # Tier 3: Persistent 5GB Free GCS Cache for tools & repo snapshots
+    # Persistent 5GB Free GCS Cache for tools & repo snapshots
     volumes {
       name = "cold-cache"
       gcs {
@@ -148,18 +91,13 @@ resource "google_cloud_run_v2_service" "agy_service" {
     }
 
     containers {
-      image = "${var.region}-docker.pkg.dev/${var.project_id}/agy-agent-repo/agy-orchestrator:latest"
+      image = "${var.region}-docker.pkg.dev/${var.project_id}/${data.google_artifact_registry_repository.agent_repo.repository_id}/agy-orchestrator:latest"
 
       resources {
         limits = {
           cpu    = "2"
           memory = "4Gi"
         }
-      }
-
-      volume_mounts {
-        name       = "hot-workspace"
-        mount_path = "/workspace"
       }
 
       volume_mounts {
@@ -178,7 +116,7 @@ resource "google_cloud_run_v2_service" "agy_service" {
           name = env.value
           value_source {
             secret_key_ref {
-              secret  = google_secret_manager_secret.vault[env.value].secret_id
+              secret  = data.google_secret_manager_secret.vault[env.value].secret_id
               version = "latest"
             }
           }
@@ -188,8 +126,6 @@ resource "google_cloud_run_v2_service" "agy_service" {
   }
 
   depends_on = [
-    google_project_service.apis,
-    google_secret_manager_secret_version.vault_placeholder,
     google_secret_manager_secret_iam_member.sa_secret_access
   ]
 }
