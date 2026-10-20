@@ -33,3 +33,9 @@ variable "drive_status_file_id" {
   description = "Optional File ID of pre-created latest_build_status.md in your 5TB Google Drive (_AGY_Cloud_Vault)"
   default     = "1u9Amsa6Qrn1DWniicziQHw4wSTtfSaqP"
 }
+
+variable "image_tag" {
+  type        = string
+  description = "Container image tag to deploy (CI passes the commit SHA)"
+  default     = "latest"
+}

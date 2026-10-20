@@ -20,4 +20,4 @@ ENV TOOLS_DIR="/mnt/cache/tools"
 ENV PATH="/mnt/cache/tools/node/bin:/mnt/cache/tools/agy/.antigravity/bin:/mnt/cache/tools/agy/bin:${PATH}"
 ENV PORT=8080
 
-CMD ["uvicorn", "main.py:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]

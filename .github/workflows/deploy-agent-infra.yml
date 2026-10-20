@@ -32,18 +32,31 @@ jobs:
       - name: Build & Push Slim Container Image (~95MB) with BuildKit Layer Cache
         run: |
           echo "${{ steps.gcp-auth.outputs.access_token }}" | docker login -u oauth2accesstoken --password-stdin https://us-central1-docker.pkg.dev
-          IMAGE_URI="us-central1-docker.pkg.dev/project-51459e90-fbb3-471f-9f9/agy-agent-repo/agy-orchestrator:latest"
-          docker pull $IMAGE_URI || true
-          docker build --cache-from $IMAGE_URI -t $IMAGE_URI ./agent-service
-          docker push $IMAGE_URI
+          IMAGE_BASE="us-central1-docker.pkg.dev/project-51459e90-fbb3-471f-9f9/agy-agent-repo/agy-orchestrator"
+          docker pull $IMAGE_BASE:latest || true
+          docker build --cache-from $IMAGE_BASE:latest -t $IMAGE_BASE:latest -t $IMAGE_BASE:${{ github.sha }} ./agent-service
+          docker push $IMAGE_BASE:latest
+          docker push $IMAGE_BASE:${{ github.sha }}
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
 
+      - name: Ensure Terraform State Bucket Exists
+        run: |
+          gcloud storage buckets describe gs://project-51459e90-fbb3-471f-9f9-tfstate >/dev/null 2>&1 || \
+            gcloud storage buckets create gs://project-51459e90-fbb3-471f-9f9-tfstate \
+              --project=project-51459e90-fbb3-471f-9f9 --location=us-central1 --uniform-bucket-level-access
+
       - name: Terraform Init & Apply
         working-directory: ./terraform
+        env:
+          TF_VAR_image_tag: ${{ github.sha }}
         run: |
           terraform init
+          # Adopt resources created by earlier runs that had no remote state
+          adopt() { terraform state list | grep -qx "$1" || terraform import "$1" "$2" || true; }
+          adopt google_storage_bucket.agent_cache project-51459e90-fbb3-471f-9f9-agy-repo-cache
+          adopt google_cloud_run_v2_service.agy_service projects/project-51459e90-fbb3-471f-9f9/locations/us-central1/services/agy-cloud-orchestrator
           terraform apply -auto-approve
 
   deploy-chat-pwa:

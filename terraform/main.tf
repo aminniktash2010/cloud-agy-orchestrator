@@ -1,5 +1,12 @@
 terraform {
   required_version = ">= 1.5.0"
+
+  # Remote state so each GitHub Actions run sees previously created resources
+  backend "gcs" {
+    bucket = "project-51459e90-fbb3-471f-9f9-tfstate"
+    prefix = "cloud-agy-orchestrator"
+  }
+
   required_providers {
     google = {
       source  = "hashicorp/google"
@@ -91,7 +98,7 @@ resource "google_cloud_run_v2_service" "agy_service" {
     }
 
     containers {
-      image = "${var.region}-docker.pkg.dev/${var.project_id}/${data.google_artifact_registry_repository.agent_repo.repository_id}/agy-orchestrator:latest"
+      image = "${var.region}-docker.pkg.dev/${var.project_id}/${data.google_artifact_registry_repository.agent_repo.repository_id}/agy-orchestrator:${var.image_tag}"
 
       resources {
         limits = {
