@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Antigravity Cloud Command Center</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card: #151c2c;
+      --accent: #38bdf8;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+    }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 1.5rem;
+      display: flex;
+      justify-content: center;
+    }
+    .container {
+      width: 100%;
+      max-width: 760px;
+      background: var(--card);
+      border-radius: 14px;
+      padding: 1.5rem;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    h1 { margin-top: 0; font-size: 1.4rem; color: var(--accent); }
+    label { display: block; margin-top: 1rem; font-size: 0.85rem; color: var(--muted); }
+    input, select, textarea, button {
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 0.35rem;
+      padding: 0.75rem;
+      border-radius: 8px;
+      border: 1px solid #2e3a52;
+      background: #0f1523;
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    button {
+      margin-top: 1.25rem;
+      background: var(--accent);
+      color: #0b0f19;
+      font-weight: 700;
+      cursor: pointer;
+      border: none;
+    }
+    pre {
+      margin-top: 1.25rem;
+      background: #070a12;
+      padding: 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.85rem;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Antigravity Cloud Orchestrator</h1>
+    <label>Cloud Run Webhook URL</label>
+    <input id="url" type="url" placeholder="https://agy-cloud-orchestrator-....us-central1.run.app/chat" />
+
+    <label>Webhook Secret (Saved in Browser Password Manager)</label>
+    <input id="secret" type="password" placeholder="Enter WEBHOOK_SECRET" />
+
+    <label>Target Repository (aminniktash2010)</label>
+    <select id="repo">
+      <option value="Atari-TV">Atari-TV</option>
+      <option value="River-Ride">River-Ride</option>
+      <option value="PriceGuard-AI">PriceGuard-AI</option>
+    </select>
+
+    <label>Architect & Stitch Prompt</label>
+    <textarea id="prompt" rows="5" placeholder="Describe the UI/feature to generate with Stitch Loop & Flutter MCP..."></textarea>
+
+    <button onclick="sendTask()">Execute in Cloud Run</button>
+    <pre id="output">Ready. Zero local compute required.</pre>
+  </div>
+
+  <script>
+    document.getElementById('url').value = localStorage.getItem('agy_url') || '';
+    async function sendTask() {
+      const url = document.getElementById('url').value.trim();
+      const secret = document.getElementById('secret').value.trim();
+      const repo = document.getElementById('repo').value;
+      const prompt = document.getElementById('prompt').value.trim();
+      const out = document.getElementById('output');
+      localStorage.setItem('agy_url', url);
+      out.textContent = 'Running Antigravity CLI + Stitch Loop in Cloud Run...';
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-webhook-token': secret },
+          body: JSON.stringify({ repo, prompt, branch: 'main' })
+        });
+        const data = await res.json();
+        out.textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        out.textContent = 'Error: ' + err.message;
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "stitch": {
+      "command": "npx",
+      "args": ["-y", "@google-labs-code/stitch-mcp"]
+    },
+    "flutter": {
+      "command": "npx",
+      "args": ["-y", "flutter-mcp"]
+    }
+  }
+}

@@ -1,53 +1,65 @@
-name: Deploy Agent Infrastructure
+name: Deploy Cloud Agent Infrastructure & PWA
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - 'terraform/**'
-      - '.github/workflows/deploy-agent-infra.yml'
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
+  pages: write
+  id-token: write
 
 jobs:
-  terraform-deploy:
-    name: Provision Cloud Infrastructure & Secrets
+  deploy-infra:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Authenticate to Google Cloud (Workload Identity Federation)
+      - name: Authenticate to Google Cloud via Account-Level WIF
         uses: google-github-actions/auth@v2
         with:
+          token_format: 'access_token'
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER || 'projects/202076903469/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider' }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT || 'play-upload@project-51459e90-fbb3-471f-9f9.iam.gserviceaccount.com' }}
 
-      - name: Set up Cloud SDK
+      - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build & Push Slim Container Image (~95MB) with BuildKit Layer Cache
+        run: |
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+          gcloud artifacts repositories create agy-agent-repo --repository-format=docker --location=us-central1 || true
+          IMAGE_URI="us-central1-docker.pkg.dev/project-51459e90-fbb3-471f-9f9/agy-agent-repo/agy-orchestrator:latest"
+          docker pull $IMAGE_URI || true
+          docker build --cache-from $IMAGE_URI -t $IMAGE_URI ./agent-service
+          docker push $IMAGE_URI
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init & Apply
+        working-directory: ./terraform
+        run: |
+          terraform init
+          terraform apply -auto-approve
+
+  deploy-chat-pwa:
+    needs: deploy-infra
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Web Chat PWA Artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          terraform_version: "1.9.5"
-
-      - name: Terraform Format Check
-        run: terraform fmt -check
-        working-directory: ./terraform
-
-      - name: Terraform Init
-        run: terraform init
-        working-directory: ./terraform
-
-      - name: Terraform Validate
-        run: terraform validate
-        working-directory: ./terraform
-
-      - name: Terraform Plan & Apply
-        run: terraform apply -auto-approve -input=false
-        working-directory: ./terraform
+          path: './web-chat-pwa'
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
