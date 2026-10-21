@@ -429,11 +429,16 @@
 
     <label>Antigravity AI Model Engine</label>
     <select id="model">
-      <option value="gemini-3.8-flash-high" selected>Gemini 3.8 Flash (High Reasoning) • Fast &amp; Reliable [Active Quota]</option>
-      <option value="gemini-3.8-flash-medium">Gemini 3.8 Flash (Medium) • Ultra-Fast</option>
-      <option value="gemini-3.8-flash-low">Gemini 3.8 Flash (Low) • Minimal Latency</option>
-      <option value="gemini-4-argon-medium">Gemini 4 Argon (Medium) • Pro Tier</option>
+      <option value="auto" selected>✨ Auto-Select (Available Quota &amp; Credit Failover)</option>
+      <option value="gemini-3.8-flash-high">Gemini 3.8 Flash (High Reasoning) • Fast &amp; Reliable [Active Quota]</option>
+      <option value="gemini-3.8-flash-medium">Gemini 3.8 Flash (Medium) • Ultra-Fast [Active Quota]</option>
+      <option value="gemini-3.8-flash-low">Gemini 3.8 Flash (Low) • Minimal Latency [Active Quota]</option>
+      <option value="gemini-4-argon-medium">Gemini 4 Argon (Medium) • Auto-Fallback if out of credit</option>
+      <option value="claude-sonnet-5-5-high">Claude Sonnet 5.5 (High) • Auto-Fallback if out of credit</option>
     </select>
+    <div style="font-size:0.75rem; color:#10b981; margin-top:0.25rem;">
+      ⚡ Autopilot Active: Full tool permissions &amp; automatic quota failover enabled
+    </div>
 
     <label>AI Architect &amp; CLI Backend Prompt</label>
     <textarea id="prompt" rows="3" placeholder="Describe the UI, feature, or update to build in Cloud Run for the selected project..."></textarea>
@@ -819,6 +824,14 @@
     }
     document.getElementById('repo').addEventListener('change', (e) => {
       localStorage.setItem('agy_selected_repo', e.target.value);
+    });
+
+    const savedModel = localStorage.getItem('agy_selected_model');
+    if (savedModel && document.querySelector(`#model option[value="${savedModel}"]`)) {
+      document.getElementById('model').value = savedModel;
+    }
+    document.getElementById('model').addEventListener('change', (e) => {
+      localStorage.setItem('agy_selected_model', e.target.value);
     });
     document.getElementById('prompt').addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {

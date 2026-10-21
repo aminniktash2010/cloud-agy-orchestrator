@@ -181,12 +181,63 @@ def build_isolated_env(repo_dir: Path) -> dict[str, str]:
             encoding="utf-8"
         )
 
+    # Autopilot configuration: full tool permissions & automated approvals
+    session_settings = session_home / ".gemini" / "settings.json"
+    if not session_settings.exists():
+        session_settings.write_text(
+            json.dumps({
+                "ide": {"enabled": True, "hasSeenNudge": True},
+                "security": {"auth": {"selectedType": "oauth-personal"}},
+                "permissions": {"autoApprove": True, "terminal": "auto", "files": "auto"}
+            }),
+            encoding="utf-8"
+        )
+
     env = os.environ.copy()
     env["HOME"] = str(session_home)
     env["XDG_CONFIG_HOME"] = str(session_home / ".config")
     env["XDG_CACHE_HOME"] = str(session_home / ".cache")
     env["PATH"] = f"/usr/local/bin:{TOOLS_DIR}/node/bin:{TOOLS_DIR}/agy/bin:{env.get('PATH', '')}"
+    env["AGY_DANGEROUSLY_SKIP_PERMISSIONS"] = "1"
+    env["ANTIGRAVITY_AUTOPILOT"] = "1"
     return env
+
+
+# Available models with active credits/quota
+ACTIVE_QUOTA_MODELS = [
+    "gemini-3.8-flash-high",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-low",
+]
+
+
+def resolve_model_candidates(requested_model: Optional[str]) -> list[str]:
+    """Resolves an ordered list of candidate models with active quota fallback."""
+    cleaned = (requested_model or "auto").strip()
+    if cleaned in ("auto", "", "default"):
+        return list(ACTIVE_QUOTA_MODELS)
+    candidates = [cleaned]
+    for fallback in ACTIVE_QUOTA_MODELS:
+        if fallback != cleaned:
+            candidates.append(fallback)
+    return candidates
+
+
+def is_credit_exhausted(return_code: int, output_text: str) -> bool:
+    """Detects whether an execution failed due to depleted credits or quota limits."""
+    if return_code == 3:
+        return True
+    low_markers = [
+        "credits balance is too low",
+        "resource_exhausted",
+        "check quota",
+        "code 429",
+        "rate limit",
+        "out of credits",
+        'error_code":429',
+    ]
+    lower = output_text.lower()
+    return any(marker in lower for marker in low_markers)
 
 
 def sse_event(event_type: str, data: any) -> str:
@@ -403,19 +454,31 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
                 target_branch = f"agy/task-{ts}"
                 subprocess.run(["git", "checkout", "-b", target_branch], cwd=repo_dir, check=True)
 
-            # Execute Antigravity CLI inside isolated per-repo session with auto-approved permissions
-            cmd_args = ["agy", "-p", cmd.prompt, "--dangerously-skip-permissions"]
-            if cmd.model:
-                cmd_args.extend(["--model", cmd.model])
+            # Execute Antigravity CLI in Autopilot mode with full permissions and credit failover
+            candidates = resolve_model_candidates(cmd.model)
+            agy_proc = None
+            used_model = candidates[0]
 
-            agy_proc = subprocess.run(
-                cmd_args,
-                cwd=repo_dir,
-                env=isolated_env,
-                capture_output=True,
-                text=True,
-                timeout=540
-            )
+            for attempt_idx, current_model in enumerate(candidates):
+                used_model = current_model
+                cmd_args = [
+                    "agy", "-p", cmd.prompt,
+                    "--mode", "accept-edits",
+                    "--dangerously-skip-permissions",
+                    "--model", current_model
+                ]
+                agy_proc = subprocess.run(
+                    cmd_args,
+                    cwd=repo_dir,
+                    env=isolated_env,
+                    capture_output=True,
+                    text=True,
+                    timeout=540
+                )
+                output_str = (agy_proc.stdout or "") + (agy_proc.stderr or "")
+                if is_credit_exhausted(agy_proc.returncode, output_str) and (attempt_idx + 1) < len(candidates):
+                    continue
+                break
 
             # Stage, commit, and push changes
             subprocess.run(["git", "add", "."], cwd=repo_dir, check=True)
@@ -444,6 +507,7 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
                 f"- **Timestamp (UTC):** {datetime.datetime.utcnow().isoformat()}\n"
                 f"- **Repository:** `{GITHUB_OWNER}/{cmd.repo}`\n"
                 f"- **Branch:** `{target_branch}`\n"
+                f"- **Model Used:** `{used_model}` (Autopilot with full permissions)\n"
                 f"- **Commit:** `{commit_hash}`\n"
                 f"- **Cache Tier:** `{cache_tier}`\n"
                 f"- **Changes Pushed:** `{pushed}`\n\n"
@@ -456,6 +520,7 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
                 "status": "success",
                 "repo": f"{GITHUB_OWNER}/{cmd.repo}",
                 "branch": target_branch,
+                "model_used": used_model,
                 "commit": commit_hash,
                 "cache_tier_used": cache_tier,
                 "changes_pushed": pushed,
@@ -490,106 +555,127 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
                     subprocess.run(["git", "checkout", "-b", target_branch], cwd=repo_dir, check=True)
                     yield sse_event("status", f"Created feature branch: {target_branch}")
 
-                yield sse_event("status", f"Running Antigravity CLI [{cache_tier}] inside PTY...")
-                yield sse_event("log", "\x1b[1;36m====================================================\x1b[0m\r\n")
-                yield sse_event("log", "\x1b[1;36m  🚀 ANTIGRAVITY CLOUD CLI SESSION (PTY Enabled)\x1b[0m\r\n")
-                yield sse_event("log", f"  \x1b[1;33mRepository:\x1b[0m {GITHUB_OWNER}/{cmd.repo}\r\n")
-                yield sse_event("log", f"  \x1b[1;33mBranch:\x1b[0m     {target_branch}\r\n")
-                yield sse_event("log", f"  \x1b[1;33mModel:\x1b[0m      {cmd.model}\r\n")
-                yield sse_event("log", f"  \x1b[1;33mCache Tier:\x1b[0m {cache_tier}\r\n")
-                yield sse_event("log", f"  \x1b[1;33mTask:\x1b[0m       {cmd.prompt}\r\n")
-                yield sse_event("log", "\x1b[1;36m====================================================\x1b[0m\r\n\r\n")
-
-                cmd_args = ["agy", "-p", cmd.prompt, "--dangerously-skip-permissions"]
-                if cmd.model:
-                    cmd_args.extend(["--model", cmd.model])
-
-                pty_env = isolated_env.copy()
-                pty_env["TERM"] = "xterm-256color"
-                pty_env["COLORTERM"] = "truecolor"
-                pty_env["FORCE_COLOR"] = "1"
-                pty_env["PYTHONUNBUFFERED"] = "1"
-
-                use_pty = False
-                master_fd = None
-                slave_fd = None
-                try:
-                    master_fd, slave_fd = pty.openpty()
-                    winsize = struct.pack("HHHH", 32, 120, 0, 0)
-                    fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
-                    use_pty = True
-                except Exception:
-                    use_pty = False
-
-                collected_output = []
+                candidates = resolve_model_candidates(cmd.model)
+                full_agent_output = ""
+                used_model = candidates[0]
                 return_code = 0
 
-                if use_pty:
-                    proc = await asyncio.create_subprocess_exec(
-                        *cmd_args,
-                        cwd=str(repo_dir),
-                        env=pty_env,
-                        stdin=slave_fd,
-                        stdout=slave_fd,
-                        stderr=slave_fd,
-                        close_fds=True
-                    )
-                    os.close(slave_fd)
-                    loop = asyncio.get_running_loop()
-                    q = asyncio.Queue()
+                for attempt_idx, current_model in enumerate(candidates):
+                    used_model = current_model
+                    yield sse_event("status", f"Running Antigravity CLI [{cache_tier}] with '{current_model}' (Autopilot)...")
+                    yield sse_event("log", "\x1b[1;36m====================================================\x1b[0m\r\n")
+                    yield sse_event("log", "  \x1b[1;36m🚀 ANTIGRAVITY CLOUD CLI SESSION (PTY Enabled)\x1b[0m\r\n")
+                    yield sse_event("log", f"  \x1b[1;33mRepository:\x1b[0m {GITHUB_OWNER}/{cmd.repo}\r\n")
+                    yield sse_event("log", f"  \x1b[1;33mBranch:\x1b[0m     {target_branch}\r\n")
+                    yield sse_event("log", f"  \x1b[1;33mModel:\x1b[0m      {current_model} \x1b[1;32m[Autopilot & Full Permissions]\x1b[0m\r\n")
+                    yield sse_event("log", f"  \x1b[1;33mCache Tier:\x1b[0m {cache_tier}\r\n")
+                    yield sse_event("log", f"  \x1b[1;33mTask:\x1b[0m       {cmd.prompt}\r\n")
+                    yield sse_event("log", "\x1b[1;36m====================================================\x1b[0m\r\n\r\n")
 
-                    def on_readable():
-                        try:
-                            chunk = os.read(master_fd, 1024)
-                            if chunk:
-                                q.put_nowait(chunk)
-                            else:
-                                loop.remove_reader(master_fd)
-                                q.put_nowait(None)
-                        except OSError:
+                    cmd_args = [
+                        "agy", "-p", cmd.prompt,
+                        "--mode", "accept-edits",
+                        "--dangerously-skip-permissions",
+                        "--model", current_model
+                    ]
+
+                    pty_env = isolated_env.copy()
+                    pty_env["TERM"] = "xterm-256color"
+                    pty_env["COLORTERM"] = "truecolor"
+                    pty_env["FORCE_COLOR"] = "1"
+                    pty_env["PYTHONUNBUFFERED"] = "1"
+
+                    use_pty = False
+                    master_fd = None
+                    slave_fd = None
+                    try:
+                        master_fd, slave_fd = pty.openpty()
+                        winsize = struct.pack("HHHH", 32, 120, 0, 0)
+                        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+                        use_pty = True
+                    except Exception:
+                        use_pty = False
+
+                    collected_output = []
+                    return_code = 0
+
+                    if use_pty:
+                        proc = await asyncio.create_subprocess_exec(
+                            *cmd_args,
+                            cwd=str(repo_dir),
+                            env=pty_env,
+                            stdin=slave_fd,
+                            stdout=slave_fd,
+                            stderr=slave_fd,
+                            close_fds=True
+                        )
+                        os.close(slave_fd)
+                        loop = asyncio.get_running_loop()
+                        q = asyncio.Queue()
+
+                        def on_readable():
                             try:
-                                loop.remove_reader(master_fd)
-                            except Exception:
-                                pass
-                            q.put_nowait(None)
+                                chunk = os.read(master_fd, 1024)
+                                if chunk:
+                                    q.put_nowait(chunk)
+                                else:
+                                    loop.remove_reader(master_fd)
+                                    q.put_nowait(None)
+                            except OSError:
+                                try:
+                                    loop.remove_reader(master_fd)
+                                except Exception:
+                                    pass
+                                q.put_nowait(None)
 
-                    loop.add_reader(master_fd, on_readable)
+                        loop.add_reader(master_fd, on_readable)
 
-                    while True:
-                        item = await q.get()
-                        if item is None:
-                            break
-                        text = item.decode("utf-8", errors="replace")
-                        collected_output.append(text)
-                        yield sse_event("log", text)
+                        while True:
+                            item = await q.get()
+                            if item is None:
+                                break
+                            text = item.decode("utf-8", errors="replace")
+                            collected_output.append(text)
+                            yield sse_event("log", text)
 
-                    return_code = await proc.wait()
-                    try:
-                        loop.remove_reader(master_fd)
-                    except Exception:
-                        pass
-                    try:
-                        os.close(master_fd)
-                    except Exception:
-                        pass
-                else:
-                    proc = await asyncio.create_subprocess_exec(
-                        *cmd_args,
-                        cwd=str(repo_dir),
-                        env=isolated_env,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT,
-                    )
-                    while True:
-                        chunk = await proc.stdout.read(512)
-                        if not chunk:
-                            break
-                        text = chunk.decode("utf-8", errors="replace")
-                        collected_output.append(text)
-                        yield sse_event("log", text)
-                    return_code = await proc.wait()
+                        return_code = await proc.wait()
+                        try:
+                            loop.remove_reader(master_fd)
+                        except Exception:
+                            pass
+                        try:
+                            os.close(master_fd)
+                        except Exception:
+                            pass
+                    else:
+                        proc = await asyncio.create_subprocess_exec(
+                            *cmd_args,
+                            cwd=str(repo_dir),
+                            env=isolated_env,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.STDOUT,
+                        )
+                        while True:
+                            chunk = await proc.stdout.read(512)
+                            if not chunk:
+                                break
+                            text = chunk.decode("utf-8", errors="replace")
+                            collected_output.append(text)
+                            yield sse_event("log", text)
+                        return_code = await proc.wait()
 
-                full_agent_output = "".join(collected_output)
+                    output_str = "".join(collected_output)
+
+                    # Check for credit or quota exhaustion
+                    if is_credit_exhausted(return_code, output_str) and (attempt_idx + 1) < len(candidates):
+                        next_model = candidates[attempt_idx + 1]
+                        yield sse_event("log", f"\r\n\x1b[1;33m⚠️ Model '{current_model}' ran out of quota/credits.\x1b[0m\r\n")
+                        yield sse_event("log", f"\x1b[1;32m🔄 Autopilot failover: automatically switching to '{next_model}' (active quota)...\x1b[0m\r\n\r\n")
+                        yield sse_event("status", f"Quota limit reached on '{current_model}'. Switching to '{next_model}'...")
+                        continue
+
+                    full_agent_output = output_str
+                    break
                 yield sse_event("status", f"CLI exited (code {return_code}). Inspecting working tree...")
 
                 # Stage changes
@@ -622,6 +708,7 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
                     f"- **Timestamp (UTC):** {datetime.datetime.utcnow().isoformat()}\n"
                     f"- **Repository:** `{GITHUB_OWNER}/{cmd.repo}`\n"
                     f"- **Branch:** `{target_branch}`\n"
+                    f"- **Model Used:** `{used_model}` (Autopilot with full permissions)\n"
                     f"- **Commit:** `{commit_hash}`\n"
                     f"- **Cache Tier:** `{cache_tier}`\n"
                     f"- **Changes Pushed:** `{pushed}`\n\n"
@@ -635,6 +722,7 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
                     "repo": cmd.repo,
                     "github_repo": f"{GITHUB_OWNER}/{cmd.repo}",
                     "branch": target_branch,
+                    "model_used": used_model,
                     "commit": commit_hash,
                     "changes_pushed": pushed,
                     "cache_tier": cache_tier,
