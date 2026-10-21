@@ -73,6 +73,38 @@ resource "google_secret_manager_secret_iam_member" "sa_secret_access" {
   member    = "serviceAccount:${var.existing_service_account}"
 }
 
+# 3b. Model Hub secrets (Epic 1/2).
+# GROQ/NVIDIA/OPENROUTER keys are optional: drop declined keys from var.hub_secrets
+# before apply. MODEL_HUB_CONFIG is read via the Secret Manager API at runtime
+# (hot-reload, no redeploy) — it gets an accessor grant but is NEVER env-mounted.
+locals {
+  hub_secrets = toset(var.hub_secrets)
+}
+
+data "google_secret_manager_secret" "hub_vault" {
+  for_each  = local.hub_secrets
+  secret_id = each.key
+  project   = var.project_id
+}
+
+resource "google_secret_manager_secret_iam_member" "sa_hub_secret_access" {
+  for_each  = local.hub_secrets
+  secret_id = data.google_secret_manager_secret.hub_vault[each.key].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${var.existing_service_account}"
+}
+
+data "google_secret_manager_secret" "hub_config" {
+  secret_id = "MODEL_HUB_CONFIG"
+  project   = var.project_id
+}
+
+resource "google_secret_manager_secret_iam_member" "sa_hub_config_access" {
+  secret_id = data.google_secret_manager_secret.hub_config.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${var.existing_service_account}"
+}
+
 # 4. Deploy Cloud Run v2 Service with Dual Volumes (Hot RAM Disk + Cold GCS Cache)
 resource "google_cloud_run_v2_service" "agy_service" {
   name     = var.service_name
@@ -129,11 +161,28 @@ resource "google_cloud_run_v2_service" "agy_service" {
           }
         }
       }
+
+      # Model Hub optional API keys (Epic 2). MODEL_HUB_CONFIG is intentionally
+      # NOT env-mounted — the hub reads it via the Secret Manager API (hot-reload).
+      dynamic "env" {
+        for_each = local.hub_secrets
+        content {
+          name = env.value
+          value_source {
+            secret_key_ref {
+              secret  = data.google_secret_manager_secret.hub_vault[env.value].secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
     }
   }
 
   depends_on = [
-    google_secret_manager_secret_iam_member.sa_secret_access
+    google_secret_manager_secret_iam_member.sa_secret_access,
+    google_secret_manager_secret_iam_member.sa_hub_secret_access,
+    google_secret_manager_secret_iam_member.sa_hub_config_access
   ]
 }
 

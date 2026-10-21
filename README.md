@@ -37,6 +37,26 @@ A **100% Cloud-Native, Zero-Local-Compute, $0.00/month Free-Tier** mobile & web 
 - **Control Bar Utilities:** Instant auto-scroll toggle, window fitting (`Fit ⛶`), clipboard copy (`📋 Copy`), buffer clearing, and dynamic font size adjustments.
 
 
+### Model Hub — priority failover chain
+
+`/chat` and `/chat/stream` now run through a **Model Hub** (`agent-service/hub/`) that walks a
+priority-ordered provider ladder and fails over automatically:
+
+1. **AGY credits** (Antigravity CLI, full agent loop — unchanged behavior when healthy)
+2. **Google AI Studio** (Gemini API via `GEMINI_API_KEY`, advisory answers)
+3. **Groq** → 4. **NVIDIA Build** → 5. **OpenRouter** `:free` (Epic 2, need Amin's keys)
+6. **xAI/Grok paid** (disabled until the funding tap)
+
+- Tier order, models, caps, and enable flags live in the `MODEL_HUB_CONFIG` Secret Manager
+  secret (hot-reloaded every 60s — reorder tiers with zero redeploy). Template:
+  [`docs/model-hub-config-template.json`](docs/model-hub-config-template.json).
+- Fallback tiers are `answer_only` by interface: advisory answers, honestly labeled, zero repo
+  side effects. `GET /hub/status` shows tier order, circuits, and quota (no secrets, ever).
+- Staging hook: `MODEL_HUB_FORCE_EXHAUST_TIER=<tier-id>` simulates exhaustion for failover tests.
+- Pre-deploy: create `MODEL_HUB_CONFIG` (+ any of `GROQ_API_KEY` / `NVIDIA_API_KEY` /
+  `OPENROUTER_API_KEY` Amin approves; drop declined keys from `var.hub_secrets`) in Secret
+  Manager **before** `terraform apply`.
+
 ---
 
 ## Step-by-Step Implementation Guide
