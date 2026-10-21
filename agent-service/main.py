@@ -130,6 +130,8 @@ class ChatCommand(BaseModel):
     branch: str = "main"
     model: str = "gemini-3.8-flash-high"
     use_feature_branch: bool = False
+    conversation_id: Optional[str] = None
+    continue_session: bool = True
 
 
 async def ensure_cached_tools():
@@ -143,6 +145,28 @@ async def ensure_cached_tools():
 def build_isolated_env(repo_dir: Path) -> dict[str, str]:
     """Creates a strictly isolated CLI & MCP session environment per repository to prevent context bleeding."""
     session_home = repo_dir / ".agy_session"
+    session_home.mkdir(parents=True, exist_ok=True)
+
+    # Restore pre-captured project session archive if available and session is fresh
+    cli_gemini_dir = session_home / ".gemini" / "antigravity-cli"
+    if not (cli_gemini_dir / "conversations").exists() or not any((cli_gemini_dir / "conversations").glob("*.db")):
+        session_archive_gz = COLD_CACHE_ROOT / "sessions" / f"{repo_dir.name}_session.tar.gz"
+        baked_archive = Path("/app/default_session.tar.gz")
+        if session_archive_gz.exists():
+            try:
+                import tarfile
+                with tarfile.open(session_archive_gz, "r:gz") as tar:
+                    tar.extractall(session_home)
+            except Exception:
+                pass
+        elif repo_dir.name == "cloud-agy-orchestrator" and baked_archive.exists():
+            try:
+                import tarfile
+                with tarfile.open(baked_archive, "r:gz") as tar:
+                    tar.extractall(session_home)
+            except Exception:
+                pass
+
     config_dir = session_home / ".config" / "antigravity"
     config_dir.mkdir(parents=True, exist_ok=True)
 
@@ -151,7 +175,6 @@ def build_isolated_env(repo_dir: Path) -> dict[str, str]:
         shutil.copy2(base_mcp, config_dir / "mcp_config.json")
 
     # Populate Antigravity CLI OAuth credentials into the isolated session
-    cli_gemini_dir = session_home / ".gemini" / "antigravity-cli"
     cli_gemini_dir.mkdir(parents=True, exist_ok=True)
     target_token = cli_gemini_dir / "antigravity-oauth-token"
 
@@ -308,6 +331,19 @@ def save_repo_snapshot(repo: str, repo_dir: Path):
         ["tar", "--use-compress-program=zstd", "-cf", str(archive_path), "-C", str(repo_dir), "."],
         check=False
     )
+    # Persist isolated session history to persistent cache tier
+    session_dir = repo_dir / ".agy_session"
+    if session_dir.exists():
+        sessions_cache_dir = COLD_CACHE_ROOT / "sessions"
+        sessions_cache_dir.mkdir(parents=True, exist_ok=True)
+        session_archive = sessions_cache_dir / f"{repo}_session.tar.gz"
+        try:
+            import tarfile
+            with tarfile.open(session_archive, "w:gz") as tar:
+                for item in session_dir.iterdir():
+                    tar.add(item, arcname=item.name)
+        except Exception:
+            pass
 
 
 def build_master_portfolio_markdown(latest_activity_md: str = "") -> str:
@@ -457,6 +493,12 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
                 target_branch = f"agy/task-{ts}"
                 subprocess.run(["git", "checkout", "-b", target_branch], cwd=repo_dir, check=True)
 
+            # Check if this project has an existing active conversation session
+            has_active_session = False
+            convo_dir = repo_dir / ".agy_session" / ".gemini" / "antigravity-cli" / "conversations"
+            if convo_dir.exists() and any(convo_dir.glob("*.db")):
+                has_active_session = True
+
             # Execute Antigravity CLI in Autopilot mode with full permissions and credit failover
             candidates = resolve_model_candidates(cmd.model)
             agy_proc = None
@@ -470,6 +512,11 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
                     "--dangerously-skip-permissions",
                     "--model", current_model
                 ]
+                if cmd.conversation_id:
+                    cmd_args.extend(["--conversation", cmd.conversation_id])
+                elif cmd.continue_session and has_active_session:
+                    cmd_args.append("-c")
+
                 agy_proc = subprocess.run(
                     cmd_args,
                     cwd=repo_dir,
@@ -558,10 +605,18 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
                     subprocess.run(["git", "checkout", "-b", target_branch], cwd=repo_dir, check=True)
                     yield sse_event("status", f"Created feature branch: {target_branch}")
 
+                # Check if this project has an active conversation session to continue
+                has_active_session = False
+                convo_dir = repo_dir / ".agy_session" / ".gemini" / "antigravity-cli" / "conversations"
+                if convo_dir.exists() and any(convo_dir.glob("*.db")):
+                    has_active_session = True
+
                 candidates = resolve_model_candidates(cmd.model)
                 full_agent_output = ""
                 used_model = candidates[0]
                 return_code = 0
+
+                session_label = "Resuming Last Active Session" if (cmd.continue_session and has_active_session) else "Fresh Isolated Session"
 
                 for attempt_idx, current_model in enumerate(candidates):
                     used_model = current_model
@@ -571,6 +626,7 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
                     yield sse_event("log", f"  \x1b[1;33mRepository:\x1b[0m {GITHUB_OWNER}/{cmd.repo}\r\n")
                     yield sse_event("log", f"  \x1b[1;33mBranch:\x1b[0m     {target_branch}\r\n")
                     yield sse_event("log", f"  \x1b[1;33mModel:\x1b[0m      {current_model} \x1b[1;32m[Autopilot & Full Permissions]\x1b[0m\r\n")
+                    yield sse_event("log", f"  \x1b[1;33mSession:\x1b[0m    {session_label} \x1b[1;32m[Conflict-Free Isolation]\x1b[0m\r\n")
                     yield sse_event("log", f"  \x1b[1;33mCache Tier:\x1b[0m {cache_tier}\r\n")
                     yield sse_event("log", f"  \x1b[1;33mTask:\x1b[0m       {cmd.prompt}\r\n")
                     yield sse_event("log", "\x1b[1;36m====================================================\x1b[0m\r\n\r\n")
@@ -581,6 +637,10 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
                         "--dangerously-skip-permissions",
                         "--model", current_model
                     ]
+                    if cmd.conversation_id:
+                        cmd_args.extend(["--conversation", cmd.conversation_id])
+                    elif cmd.continue_session and has_active_session:
+                        cmd_args.append("-c")
 
                     pty_env = isolated_env.copy()
                     pty_env["TERM"] = "xterm-256color"

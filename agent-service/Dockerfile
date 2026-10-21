@@ -14,7 +14,12 @@ RUN curl -fsSL https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-x64.tar.xz |
 # Pre-install Antigravity CLI directly into /usr/local/bin/agy with native execution permissions
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- -d /usr/local/bin \
     && if [ ! -f /usr/local/bin/agy ] && [ -f /root/.local/bin/agy ]; then cp /root/.local/bin/agy /usr/local/bin/agy; fi \
-    && chmod +x /usr/local/bin/agy
+    && mv /usr/local/bin/agy /usr/local/bin/agy-real \
+    && chmod +x /usr/local/bin/agy-real
+
+# Install Intelligent Autopilot & Session-Isolation Launcher Wrapper
+COPY agy-wrapper.sh /usr/local/bin/agy
+RUN chmod +x /usr/local/bin/agy
 
 # Pre-accept Terms of Service & onboarding so agy never gets stuck on interactive ToS
 RUN mkdir -p /root/.gemini/antigravity /root/.gemini/antigravity-cli \
@@ -22,20 +27,31 @@ RUN mkdir -p /root/.gemini/antigravity /root/.gemini/antigravity-cli \
     && printf 'post_onboarding: {\n  completed_steps: POST_ONBOARDING_STEP_TYPE_MANAGER_WELCOME\n  completed_steps: POST_ONBOARDING_STEP_TYPE_USAGE_MODE\n  completed_steps: POST_ONBOARDING_STEP_TYPE_AGENT_CONFIGURATION\n  completed_steps: POST_ONBOARDING_STEP_TYPE_ADD_WORKSPACE\n}\ninstallation_uuid: "164c21cf-20c9-4451-8c37-de0ae61960f9"\n' > /root/.gemini/antigravity-cli/jetski_state.pbtxt \
     && printf '{"ide":{"enabled":true,"hasSeenNudge":true},"security":{"auth":{"selectedType":"oauth-personal"}},"permissions":{"autoApprove":true,"terminal":"auto","files":"auto"}}\n' > /root/.gemini/settings.json
 
-# Auto-navigate to project path and launch agy with full permissions & autopilot whenever an interactive terminal opens
-RUN printf '\nif [ -t 0 ]; then\n  mkdir -p /workspace/cloud-agy-orchestrator\n  cd /workspace/cloud-agy-orchestrator\n  if [ -f /mnt/cache/antigravity-oauth-token ] && [ ! -f /root/.gemini/antigravity-cli/antigravity-oauth-token ]; then\n    mkdir -p /root/.gemini/antigravity-cli\n    cp /mnt/cache/antigravity-oauth-token /root/.gemini/antigravity-cli/antigravity-oauth-token\n  fi\n  echo "=========================================================="\n  echo " 🚀 Antigravity CLI Auto-Loaded in Project: $(pwd)"\n  echo " ⚡ Autopilot Enabled • Full Tool Permissions (Skip Prompts)"\n  echo "=========================================================="\n  exec agy --mode accept-edits --dangerously-skip-permissions --model gemini-3.8-flash-high\nfi\n' >> /root/.bashrc \
-    && printf '#!/bin/bash\nTARGET="${1:-/workspace/cloud-agy-orchestrator}"\nmkdir -p "$TARGET" && cd "$TARGET"\nif [ -f /mnt/cache/antigravity-oauth-token ] && [ ! -f /root/.gemini/antigravity-cli/antigravity-oauth-token ]; then\n  mkdir -p /root/.gemini/antigravity-cli\n  cp /mnt/cache/antigravity-oauth-token /root/.gemini/antigravity-cli/antigravity-oauth-token\nfi\nexec agy --mode accept-edits --dangerously-skip-permissions --model gemini-3.8-flash-high "${@:2}"\n' > /usr/local/bin/open-agy \
-    && printf '#!/bin/bash\n# Autopilot launcher with automatic credit & quota failover\nfor M in gemini-3.8-flash-high gemini-3.8-flash-medium gemini-3.8-flash-low; do\n  echo "🚀 Running agy with model $M (autopilot + full permissions)..."\n  agy --mode accept-edits --dangerously-skip-permissions --model "$M" "$@"\n  CODE=$?\n  if [ $CODE -ne 3 ]; then exit $CODE; fi\n  echo "⚠️ Quota limit on $M. Cascading to next available model..."\ndone\n' > /usr/local/bin/agy-autopilot \
-    && chmod +x /usr/local/bin/open-agy /usr/local/bin/agy-autopilot
+# Pre-seed captured project session for cloud-agy-orchestrator so active session is immediately available
+COPY default_session.tar.gz /tmp/default_session.tar.gz
+RUN mkdir -p /workspace/cloud-agy-orchestrator/.agy_session \
+    && tar -xzf /tmp/default_session.tar.gz -C /workspace/cloud-agy-orchestrator/.agy_session \
+    && rm -f /tmp/default_session.tar.gz
+
+# System-wide auto-cd to workspace so any container entry (interactive, docker exec, sh, bash) never lands in root
+RUN printf 'if [ "$PWD" = "/" ] || [ "$PWD" = "/root" ] || [ "$PWD" = "/app" ]; then cd /workspace/cloud-agy-orchestrator 2>/dev/null || true; fi\n' >> /etc/bash.bashrc \
+    && printf 'if [ "$PWD" = "/" ] || [ "$PWD" = "/root" ] || [ "$PWD" = "/app" ]; then cd /workspace/cloud-agy-orchestrator 2>/dev/null || true; fi\n' >> /etc/profile \
+    && printf '\nif [ "$PWD" = "/" ] || [ "$PWD" = "/root" ] || [ "$PWD" = "/app" ]; then cd /workspace/cloud-agy-orchestrator; fi\nif [ -t 0 ]; then exec /usr/local/bin/agy; fi\n' >> /root/.bashrc \
+    && printf '#!/bin/bash\nTARGET="${1:-/workspace/cloud-agy-orchestrator}"\nmkdir -p "$TARGET" && cd "$TARGET"\nexec /usr/local/bin/agy "${@:2}"\n' > /usr/local/bin/open-agy \
+    && chmod +x /usr/local/bin/open-agy
 
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY mcp_config.json /root/.config/antigravity/mcp_config.json
+COPY default_session.tar.gz .
 COPY main.py .
+
+# Switch default container working directory directly into the active project (never root)
+WORKDIR /workspace/cloud-agy-orchestrator
 
 ENV PORT=8080
 ENV PATH="/usr/local/bin:${PATH}"
 
-CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+CMD ["sh", "-c", "exec uvicorn --app-dir /app main:app --host 0.0.0.0 --port ${PORT:-8080}"]

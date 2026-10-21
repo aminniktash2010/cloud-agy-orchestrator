@@ -442,8 +442,11 @@
 
     <label>AI Architect &amp; CLI Backend Prompt</label>
     <textarea id="prompt" rows="3" placeholder="Describe the UI, feature, or update to build in Cloud Run for the selected project..."></textarea>
-    <div style="font-size:0.75rem; color:var(--muted); margin-top:0.35rem; display:flex; justify-content:space-between;">
-      <span>💡 CLI auto-loads in active project path</span>
+    <div style="font-size:0.75rem; color:var(--muted); margin-top:0.35rem; display:flex; justify-content:space-between; align-items:center;">
+      <label style="display:inline-flex; align-items:center; gap:0.35rem; cursor:pointer; color:#38bdf8; font-weight:500;">
+        <input type="checkbox" id="continue-session" checked style="accent-color:#38bdf8; cursor:pointer;">
+        🔄 Continue Active Project Session (Isolated Memory)
+      </label>
       <span>Press <strong>Ctrl + Enter</strong> to execute</span>
     </div>
 
@@ -845,6 +848,7 @@
       const repo = document.getElementById('repo').value;
       const model = document.getElementById('model').value;
       const prompt = document.getElementById('prompt').value.trim();
+      const continueSession = document.getElementById('continue-session') ? document.getElementById('continue-session').checked : true;
       const termStatus = document.getElementById('term-status');
       const termPulse = document.getElementById('term-pulse');
       const btnExec = document.getElementById('btn-execute');
@@ -901,7 +905,7 @@
             'Content-Type': 'application/json',
             'x-webhook-token': 'agy-public-client'
           },
-          body: JSON.stringify({ repo, prompt, model, branch: 'main' })
+          body: JSON.stringify({ repo, prompt, model, branch: 'main', continue_session: continueSession })
         });
 
         if (!response.ok) {
