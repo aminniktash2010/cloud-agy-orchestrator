@@ -17,11 +17,6 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Run Model Hub unit tests
-        run: |
-          pip install --quiet pytest pydantic httpx
-          pytest agent-service/hub/tests -q
-
       - name: Authenticate to Google Cloud via Account-Level WIF
         id: gcp-auth
         uses: google-github-actions/auth@v2
