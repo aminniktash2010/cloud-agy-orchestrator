@@ -910,7 +910,9 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
 @app.websocket("/terminal/ws")
 async def websocket_terminal(websocket: WebSocket, repo: str = "cloud-agy-orchestrator", token: str = None, conversation_id: str = None):
     """Direct interactive WebSocket terminal hooked to an authentic Cloud Run PTY session."""
-    if WEBHOOK_SECRET and token and token not in (WEBHOOK_SECRET, "agy-public-client"):
+    # Hardened: a missing token must NOT short-circuit to accepted (was: anonymous
+    # WebSocket shell on the public container). The PWA always sends a token.
+    if token not in (WEBHOOK_SECRET, "agy-public-client"):
         await websocket.close(code=1008)
         return
     await websocket.accept()
