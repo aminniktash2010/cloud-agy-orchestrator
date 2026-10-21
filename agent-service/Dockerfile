@@ -47,6 +47,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY mcp_config.json /root/.config/antigravity/mcp_config.json
 COPY default_session.tar.gz .
 COPY main.py .
+COPY hub/ ./hub/
 
 # Switch default container working directory directly into the active project (never root)
 WORKDIR /workspace/cloud-agy-orchestrator
