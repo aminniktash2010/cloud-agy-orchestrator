@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -21,6 +22,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("agent-service")
 
 import google.auth
 from googleapiclient.discovery import build
@@ -291,29 +295,42 @@ def prepare_cached_repo(repo: str, branch: str) -> tuple[Path, str]:
 
     repo_dir = HOT_WORKSPACE_ROOT / repo
     archive_path = COLD_CACHE_ROOT / f"{repo}.tar.zst"
-    remote_url = f"https://x-access-token:{GITHUB_PAT}@github.com/{GITHUB_OWNER}/{repo}.git"
+    if GITHUB_PAT:
+        remote_url = f"https://x-access-token:{GITHUB_PAT}@github.com/{GITHUB_OWNER}/{repo}.git"
+    else:
+        remote_url = f"https://github.com/{GITHUB_OWNER}/{repo}.git"
     cache_status = "COLD_CLONE"
 
     if (repo_dir / ".git").exists():
         cache_status = "WARM_RAM_HIT"
-        subprocess.run(["git", "remote", "set-url", "origin", remote_url], cwd=repo_dir, check=True)
-        subprocess.run(["git", "fetch", "--depth=1", "origin", branch], cwd=repo_dir, check=True)
-        subprocess.run(["git", "checkout", "-B", branch, f"origin/{branch}"], cwd=repo_dir, check=True)
-        subprocess.run(["git", "clean", "-fd", "-e", ".agy_session"], cwd=repo_dir, check=True)
+        subprocess.run(["git", "remote", "set-url", "origin", remote_url], cwd=repo_dir, check=False)
+        try:
+            subprocess.run(["git", "fetch", "--depth=1", "origin", branch], cwd=repo_dir, check=True)
+            subprocess.run(["git", "checkout", "-B", branch, f"origin/{branch}"], cwd=repo_dir, check=True)
+        except Exception:
+            pass
+        subprocess.run(["git", "clean", "-fd", "-e", ".agy_session"], cwd=repo_dir, check=False)
 
     elif archive_path.exists():
         cache_status = "GCS_SNAPSHOT_RESTORE"
         repo_dir.mkdir(parents=True, exist_ok=True)
         subprocess.run(["tar", "--use-compress-program=zstd", "-xf", str(archive_path), "-C", str(repo_dir)], check=True)
-        subprocess.run(["git", "remote", "set-url", "origin", remote_url], cwd=repo_dir, check=True)
-        subprocess.run(["git", "fetch", "--depth=1", "origin", branch], cwd=repo_dir, check=True)
-        subprocess.run(["git", "checkout", "-B", branch, f"origin/{branch}"], cwd=repo_dir, check=True)
+        subprocess.run(["git", "remote", "set-url", "origin", remote_url], cwd=repo_dir, check=False)
+        try:
+            subprocess.run(["git", "fetch", "--depth=1", "origin", branch], cwd=repo_dir, check=True)
+            subprocess.run(["git", "checkout", "-B", branch, f"origin/{branch}"], cwd=repo_dir, check=True)
+        except Exception:
+            pass
 
     else:
-        subprocess.run(
-            ["git", "clone", "--depth=1", "--branch", branch, remote_url, str(repo_dir)],
-            check=True
-        )
+        clone_cmd = ["git", "clone", "--depth=1"]
+        if branch:
+            clone_cmd.extend(["--branch", branch])
+        clone_cmd.extend([remote_url, str(repo_dir)])
+        try:
+            subprocess.run(clone_cmd, check=True)
+        except Exception:
+            subprocess.run(["git", "clone", "--depth=1", remote_url, str(repo_dir)], check=True)
 
     # Copy pre-cached Stitch skills into repo if not already present
     baked_stitch = TOOLS_DIR / "skills" / ".stitch"
@@ -904,14 +921,17 @@ async def websocket_terminal(websocket: WebSocket, repo: str = "cloud-agy-orches
 
     try:
         repo_clean = (repo or "cloud-agy-orchestrator").strip()
+        await websocket.send_text(f"\x1b[90mPreparing workspace for {repo_clean}...\x1b[0m\r\n")
 
         # Ensure repository exists and is isolated in /workspace/{repo_clean}
         try:
-            repo_dir, _ = prepare_cached_repo(repo_clean, "main")
+            repo_dir, cache_stat = prepare_cached_repo(repo_clean, "main")
+            await websocket.send_text(f"\x1b[32m✔ Workspace ready [{cache_stat}]\x1b[0m\r\n")
         except Exception as e:
             logger.warning(f"prepare_cached_repo fallback for {repo_clean}: {e}")
             repo_dir = HOT_WORKSPACE_ROOT / repo_clean
             repo_dir.mkdir(parents=True, exist_ok=True)
+            await websocket.send_text(f"\x1b[33m! Workspace initialized: {e}\x1b[0m\r\n")
 
         master_fd, slave_fd = pty.openpty()
         winsize = struct.pack("HHHH", 32, 120, 0, 0)
