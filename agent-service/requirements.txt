@@ -6,4 +6,5 @@ python-multipart==0.0.12
 google-api-python-client==2.149.0
 google-auth==2.35.0
 websockets==13.1
+google-genai==2.32.0
 

@@ -39,3 +39,9 @@ variable "image_tag" {
   description = "Container image tag to deploy (CI passes the commit SHA)"
   default     = "latest"
 }
+
+variable "hub_secrets" {
+  type        = list(string)
+  description = "Optional Model Hub API keys to mount from Secret Manager (Epic 2 tiers). IMPORTANT: create each secret in the Secret Manager console BEFORE running terraform apply, and remove any key Amin declined from this list — the data sources below fail the apply when a secret does not exist yet. XAI_API_KEY stays out of this list until the funding tap."
+  default     = ["GROQ_API_KEY", "NVIDIA_API_KEY", "OPENROUTER_API_KEY"]
+}

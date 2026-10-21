@@ -23,6 +23,13 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+# Model Hub: priority-ordered provider failover chain (Epic 1)
+from hub import ModelHub, load_config
+from hub import observability as hub_observability
+from hub.router import HubError
+from hub.signals import agy_exhausted
+from hub.types import HubRequest, HubResult, RepoContext
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("agent-service")
 
@@ -127,6 +134,9 @@ TOOLS_DIR = Path("/mnt/cache/tools")         # Persistent 5GB GCS tool directory
 # Per-repository concurrency lock to prevent race conditions while allowing multi-repo parallelism
 REPO_LOCKS: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 TOOLS_LOCK = asyncio.Lock()
+
+# Model Hub singleton: one router owns the priority ladder for every entry point (AD-1)
+model_hub = ModelHub()
 
 
 class ChatCommand(BaseModel):
@@ -234,41 +244,9 @@ def build_isolated_env(repo_dir: Path) -> dict[str, str]:
     return env
 
 
-# Available models with active credits/quota
-ACTIVE_QUOTA_MODELS = [
-    "gemini-3.8-flash-high",
-    "gemini-3.8-flash-medium",
-    "gemini-3.8-flash-low",
-]
-
-
-def resolve_model_candidates(requested_model: Optional[str]) -> list[str]:
-    """Resolves an ordered list of candidate models with active quota fallback."""
-    cleaned = (requested_model or "auto").strip()
-    if cleaned in ("auto", "", "default"):
-        return list(ACTIVE_QUOTA_MODELS)
-    candidates = [cleaned]
-    for fallback in ACTIVE_QUOTA_MODELS:
-        if fallback != cleaned:
-            candidates.append(fallback)
-    return candidates
-
-
-def is_credit_exhausted(return_code: int, output_text: str) -> bool:
-    """Detects whether an execution failed due to depleted credits or quota limits."""
-    if return_code == 3:
-        return True
-    low_markers = [
-        "credits balance is too low",
-        "resource_exhausted",
-        "check quota",
-        "code 429",
-        "rate limit",
-        "out of credits",
-        'error_code":429',
-    ]
-    lower = output_text.lower()
-    return any(marker in lower for marker in low_markers)
+# Model selection & credit-failover now live in the Model Hub (hub/):
+# hub.config.DEFAULT_LADDER + hub.router.ModelHub replace the code below.
+# Exhaustion markers moved verbatim to hub.signals.agy_exhausted().
 
 
 def sse_event(event_type: str, data: any) -> str:
@@ -588,6 +566,15 @@ async def sync_token(req: TokenSyncRequest, x_webhook_token: str = Header(None))
     return {"status": "success", "message": "Antigravity OAuth token cached in persistent GCS."}
 
 
+@app.get("/hub/status")
+async def hub_status(x_webhook_token: str = Header(None)):
+    """Model Hub ladder status: tier order, key/config state, circuit breakers,
+    quota usage. Never contains secrets (AC-10)."""
+    if WEBHOOK_SECRET and x_webhook_token not in (WEBHOOK_SECRET, "agy-public-client"):
+        raise HTTPException(status_code=401, detail="Unauthorized webhook token")
+    return model_hub.status()
+
+
 @app.post("/chat")
 async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(None)):
     # Allow passwordless execution from the official Web Chat PWA & Android Play Console app
@@ -614,70 +601,78 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
             if convo_dir.exists() and any(convo_dir.glob("*.db")):
                 has_active_session = True
 
-            # Execute Antigravity CLI in Autopilot mode with full permissions and credit failover
-            candidates = resolve_model_candidates(cmd.model)
-            agy_proc = None
-            used_model = candidates[0]
-
-            for attempt_idx, current_model in enumerate(candidates):
-                used_model = current_model
-                cmd_args = [
-                    "agy", "-p", cmd.prompt,
-                    "--mode", "accept-edits",
-                    "--dangerously-skip-permissions",
-                    "--model", current_model
-                ]
-                if cmd.conversation_id:
-                    cmd_args.extend(["--conversation", cmd.conversation_id])
-                elif cmd.continue_session and has_active_session:
-                    cmd_args.append("-c")
-
-                agy_proc = subprocess.run(
-                    cmd_args,
-                    cwd=repo_dir,
+            # Execute via the Model Hub: priority ladder with automatic failover (AD-1).
+            # The legacy ChatCommand.model pins the first Tier-0 model; "auto" uses the config ladder.
+            hub_request = HubRequest(
+                prompt=cmd.prompt,
+                repo=cmd.repo,
+                branch=cmd.branch,
+                use_feature_branch=cmd.use_feature_branch,
+                conversation_id=cmd.conversation_id,
+                continue_session=cmd.continue_session,
+                repo_ctx=RepoContext(
+                    repo_dir=str(repo_dir),
                     env=isolated_env,
-                    capture_output=True,
-                    text=True,
-                    timeout=540
+                    has_active_session=has_active_session,
+                    target_branch=target_branch,
+                    cache_tier=cache_tier,
+                ),
+                requested_model_override=(
+                    None
+                    if (cmd.model or "auto").strip().lower() in ("auto", "", "default")
+                    else cmd.model.strip()
+                ),
+            )
+            result = await model_hub.execute(hub_request)
+
+            if result.ladder_empty:
+                # FR-5.1: structured 429, never a bare 500 or a hallucinated answer
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "error": "ladder_empty",
+                        "message": "All model-hub tiers exhausted or unavailable.",
+                        "attempts": [a.model_dump() for a in result.failover_attempts],
+                    },
                 )
-                output_str = (agy_proc.stdout or "") + (agy_proc.stderr or "")
-                if is_credit_exhausted(agy_proc.returncode, output_str) and (attempt_idx + 1) < len(candidates):
-                    continue
-                break
 
-            # Stage, commit, and push changes
-            subprocess.run(["git", "add", "."], cwd=repo_dir, check=True)
-            diff_check = subprocess.run(["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True, text=True)
-
+            # Side effects happen once, after the winner, only for agent_loop (AD-6).
+            # answer_only (advisory) tiers never mutate the repo.
             pushed = False
             commit_hash = ""
-            if diff_check.stdout.strip():
-                commit_msg = f"feat(agy): {cmd.prompt[:65]}"
-                subprocess.run(
-                    ["git", "commit", "-m", commit_msg],
-                    cwd=repo_dir,
-                    check=True
-                )
-                rev_parse = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_dir, capture_output=True, text=True)
-                commit_hash = rev_parse.stdout.strip()
-                subprocess.run(["git", "push", "-u", "origin", target_branch], cwd=repo_dir, check=True)
-                pushed = True
+            if result.capability_mode == "agent_loop":
+                subprocess.run(["git", "add", "."], cwd=repo_dir, check=True)
+                diff_check = subprocess.run(["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True, text=True)
 
-            # Persist updated repo + isolated .agy_session to 5GB GCS snapshot
-            save_repo_snapshot(cmd.repo, repo_dir)
+                if diff_check.stdout.strip():
+                    commit_msg = f"feat(agy): {cmd.prompt[:65]}"
+                    subprocess.run(
+                        ["git", "commit", "-m", commit_msg],
+                        cwd=repo_dir,
+                        check=True
+                    )
+                    rev_parse = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_dir, capture_output=True, text=True)
+                    commit_hash = rev_parse.stdout.strip()
+                    subprocess.run(["git", "push", "-u", "origin", target_branch], cwd=repo_dir, check=True)
+                    pushed = True
+
+                # Persist updated repo + isolated .agy_session to 5GB GCS snapshot
+                save_repo_snapshot(cmd.repo, repo_dir)
 
             # Sync summary report to 5TB Google Drive for instant Gemini @Google Drive inspection
+            hub_cfg = load_config()
             report_md = (
                 f"# Antigravity Cloud Build Report\n"
                 f"- **Timestamp (UTC):** {datetime.datetime.utcnow().isoformat()}\n"
                 f"- **Repository:** `{GITHUB_OWNER}/{cmd.repo}`\n"
                 f"- **Branch:** `{target_branch}`\n"
-                f"- **Model Used:** `{used_model}` (Autopilot with full permissions)\n"
                 f"- **Commit:** `{commit_hash}`\n"
                 f"- **Cache Tier:** `{cache_tier}`\n"
                 f"- **Changes Pushed:** `{pushed}`\n\n"
+                f"{hub_observability.drive_hub_block(result)}\n\n"
                 f"## Prompt\n```\n{cmd.prompt}\n```\n\n"
-                f"## Agent Output\n```\n{agy_proc.stdout[-3000:]}\n```\n"
+                f"## Agent Output\n```\n{result.answer[-3000:]}\n```\n"
+                f"{hub_observability.drive_footer(hub_cfg)}\n"
             )
             drive_sync_status = sync_status_to_5tb_drive(report_md)
 
@@ -685,16 +680,27 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
                 "status": "success",
                 "repo": f"{GITHUB_OWNER}/{cmd.repo}",
                 "branch": target_branch,
-                "model_used": used_model,
+                "model_used": result.model,
                 "commit": commit_hash,
                 "cache_tier_used": cache_tier,
                 "changes_pushed": pushed,
                 "drive_sync": drive_sync_status,
-                "agent_output": agy_proc.stdout[-2000:],
+                "agent_output": result.answer[-2000:],
+                "serving_line": result.serving_line,
+                "hub": {
+                    "tier_used": result.tier_used,
+                    "provider": result.provider,
+                    "model": result.model,
+                    "capability_mode": result.capability_mode,
+                    "advisory_banner": result.advisory_banner,
+                    "failover_attempts": [a.model_dump() for a in result.failover_attempts],
+                },
             }
 
         except subprocess.CalledProcessError as e:
             raise HTTPException(status_code=500, detail=f"Command failed: {e.stderr or str(e)}")
+        except HubError as e:
+            raise HTTPException(status_code=500, detail=f"Model hub error: {e}")
 
 
 @app.post("/chat/stream")
@@ -726,172 +732,116 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
                 if convo_dir.exists() and any(convo_dir.glob("*.db")):
                     has_active_session = True
 
-                candidates = resolve_model_candidates(cmd.model)
-                full_agent_output = ""
-                used_model = candidates[0]
-                return_code = 0
+                yield sse_event("status", "Model hub engaged: walking the priority ladder...")
 
-                session_label = "Resuming Last Active Session" if (cmd.continue_session and has_active_session) else "Fresh Isolated Session"
+                hub_request = HubRequest(
+                    prompt=cmd.prompt,
+                    repo=cmd.repo,
+                    branch=cmd.branch,
+                    use_feature_branch=cmd.use_feature_branch,
+                    conversation_id=cmd.conversation_id,
+                    continue_session=cmd.continue_session,
+                    repo_ctx=RepoContext(
+                        repo_dir=str(repo_dir),
+                        env=isolated_env,
+                        has_active_session=has_active_session,
+                        target_branch=target_branch,
+                        cache_tier=cache_tier,
+                    ),
+                    requested_model_override=(
+                        None
+                        if (cmd.model or "auto").strip().lower() in ("auto", "", "default")
+                        else cmd.model.strip()
+                    ),
+                )
 
-                for attempt_idx, current_model in enumerate(candidates):
-                    used_model = current_model
-                    yield sse_event("status", f"Running Antigravity CLI [{cache_tier}] with '{current_model}' (Autopilot)...")
-                    yield sse_event("log", "\x1b[1;36m====================================================\x1b[0m\r\n")
-                    yield sse_event("log", "  \x1b[1;36m🚀 ANTIGRAVITY CLOUD CLI SESSION (PTY Enabled)\x1b[0m\r\n")
-                    yield sse_event("log", f"  \x1b[1;33mRepository:\x1b[0m {GITHUB_OWNER}/{cmd.repo}\r\n")
-                    yield sse_event("log", f"  \x1b[1;33mBranch:\x1b[0m     {target_branch}\r\n")
-                    yield sse_event("log", f"  \x1b[1;33mModel:\x1b[0m      {current_model} \x1b[1;32m[Autopilot & Full Permissions]\x1b[0m\r\n")
-                    yield sse_event("log", f"  \x1b[1;33mSession:\x1b[0m    {session_label} \x1b[1;32m[Conflict-Free Isolation]\x1b[0m\r\n")
-                    yield sse_event("log", f"  \x1b[1;33mCache Tier:\x1b[0m {cache_tier}\r\n")
-                    yield sse_event("log", f"  \x1b[1;33mTask:\x1b[0m       {cmd.prompt}\r\n")
-                    yield sse_event("log", "\x1b[1;36m====================================================\x1b[0m\r\n\r\n")
-
-                    cmd_args = [
-                        "agy", "-p", cmd.prompt,
-                        "--mode", "accept-edits",
-                        "--dangerously-skip-permissions",
-                        "--model", current_model
-                    ]
-                    if cmd.conversation_id:
-                        cmd_args.extend(["--conversation", cmd.conversation_id])
-                    elif cmd.continue_session and has_active_session:
-                        cmd_args.append("-c")
-
-                    pty_env = isolated_env.copy()
-                    pty_env["TERM"] = "xterm-256color"
-                    pty_env["COLORTERM"] = "truecolor"
-                    pty_env["FORCE_COLOR"] = "1"
-                    pty_env["PYTHONUNBUFFERED"] = "1"
-
-                    use_pty = False
-                    master_fd = None
-                    slave_fd = None
-                    try:
-                        master_fd, slave_fd = pty.openpty()
-                        winsize = struct.pack("HHHH", 32, 120, 0, 0)
-                        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
-                        use_pty = True
-                    except Exception:
-                        use_pty = False
-
-                    collected_output = []
-                    return_code = 0
-
-                    if use_pty:
-                        proc = await asyncio.create_subprocess_exec(
-                            *cmd_args,
-                            cwd=str(repo_dir),
-                            env=pty_env,
-                            stdin=slave_fd,
-                            stdout=slave_fd,
-                            stderr=slave_fd,
-                            close_fds=True
+                final_result: HubResult | None = None
+                async for hub_event in model_hub.execute_stream(hub_request):
+                    if hub_event.kind == "log":
+                        yield sse_event("log", hub_event.payload)
+                    elif hub_event.kind == "status":
+                        payload = hub_event.payload
+                        yield sse_event(
+                            "status",
+                            payload if isinstance(payload, str) else json.dumps(payload),
                         )
-                        os.close(slave_fd)
-                        loop = asyncio.get_running_loop()
-                        q = asyncio.Queue()
-
-                        def on_readable():
-                            try:
-                                chunk = os.read(master_fd, 1024)
-                                if chunk:
-                                    q.put_nowait(chunk)
-                                else:
-                                    loop.remove_reader(master_fd)
-                                    q.put_nowait(None)
-                            except OSError:
-                                try:
-                                    loop.remove_reader(master_fd)
-                                except Exception:
-                                    pass
-                                q.put_nowait(None)
-
-                        loop.add_reader(master_fd, on_readable)
-
-                        while True:
-                            item = await q.get()
-                            if item is None:
-                                break
-                            text = item.decode("utf-8", errors="replace")
-                            collected_output.append(text)
-                            yield sse_event("log", text)
-
-                        return_code = await proc.wait()
-                        try:
-                            loop.remove_reader(master_fd)
-                        except Exception:
-                            pass
-                        try:
-                            os.close(master_fd)
-                        except Exception:
-                            pass
-                    else:
-                        proc = await asyncio.create_subprocess_exec(
-                            *cmd_args,
-                            cwd=str(repo_dir),
-                            env=isolated_env,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.STDOUT,
+                    elif hub_event.kind == "tier_switch":
+                        # Live failover visibility (FR-4.2)
+                        yield sse_event("tier_switch", hub_event.payload)
+                        to = (hub_event.payload or {}).get("to", {})
+                        reason = (hub_event.payload or {}).get("reason", "")
+                        yield sse_event(
+                            "status",
+                            f"🔄 Hub failover ({reason}): now trying "
+                            f"{to.get('provider', '?')} / {to.get('model', '?')} "
+                            f"[{to.get('tier', '?')}]...",
                         )
-                        while True:
-                            chunk = await proc.stdout.read(512)
-                            if not chunk:
-                                break
-                            text = chunk.decode("utf-8", errors="replace")
-                            collected_output.append(text)
-                            yield sse_event("log", text)
-                        return_code = await proc.wait()
+                    elif hub_event.kind == "error":
+                        yield sse_event("error", hub_event.payload)
+                        return
+                    elif hub_event.kind == "done":
+                        final_result = HubResult.model_validate(hub_event.payload)
 
-                    output_str = "".join(collected_output)
+                if final_result is None:
+                    yield sse_event("error", "Model hub produced no result.")
+                    return
 
-                    # Check for credit or quota exhaustion
-                    if is_credit_exhausted(return_code, output_str) and (attempt_idx + 1) < len(candidates):
-                        next_model = candidates[attempt_idx + 1]
-                        yield sse_event("log", f"\r\n\x1b[1;33m⚠️ Model '{current_model}' ran out of quota/credits.\x1b[0m\r\n")
-                        yield sse_event("log", f"\x1b[1;32m🔄 Autopilot failover: automatically switching to '{next_model}' (active quota)...\x1b[0m\r\n\r\n")
-                        yield sse_event("status", f"Quota limit reached on '{current_model}'. Switching to '{next_model}'...")
-                        continue
+                if final_result.ladder_empty:
+                    # FR-5.1: structured 429-style payload, never a bare 500
+                    yield sse_event("done", {
+                        "status": "ladder_empty",
+                        "error": "ladder_empty",
+                        "message": "All model-hub tiers exhausted or unavailable.",
+                        "attempts": [a.model_dump() for a in final_result.failover_attempts],
+                    })
+                    return
 
-                    full_agent_output = output_str
-                    break
-                yield sse_event("status", f"CLI exited (code {return_code}). Inspecting working tree...")
+                yield sse_event(
+                    "status",
+                    f"Hub finished: served by {final_result.provider} "
+                    f"({final_result.model}) [{final_result.tier_used}]. "
+                    "Inspecting working tree...",
+                )
 
-                # Stage changes
-                subprocess.run(["git", "add", "."], cwd=repo_dir, check=True)
-                diff_check = subprocess.run(["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True, text=True)
-
+                # Side effects once, post-winner, only for agent_loop (AD-6)
                 pushed = False
                 commit_hash = ""
-                if diff_check.stdout.strip():
-                    commit_msg = f"feat(agy): {cmd.prompt[:65]}"
-                    subprocess.run(["git", "commit", "-m", commit_msg], cwd=repo_dir, check=True)
-                    rev_parse = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_dir, capture_output=True, text=True)
-                    commit_hash = rev_parse.stdout.strip()
-                    yield sse_event("status", f"Committed: {commit_hash[:7]} - {commit_msg}")
-                    yield sse_event("status", f"Pushing to origin/{target_branch}...")
-                    subprocess.run(["git", "push", "-u", "origin", target_branch], cwd=repo_dir, check=True)
-                    pushed = True
-                    yield sse_event("status", f"Successfully pushed commit {commit_hash[:7]} to GitHub!")
-                else:
-                    yield sse_event("status", "Working tree clean; no code changes generated.")
+                if final_result.capability_mode == "agent_loop":
+                    subprocess.run(["git", "add", "."], cwd=repo_dir, check=True)
+                    diff_check = subprocess.run(["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True, text=True)
 
-                # Persist snapshot to GCS
-                yield sse_event("status", "Persisting workspace snapshot to GCS cache...")
-                save_repo_snapshot(cmd.repo, repo_dir)
+                    if diff_check.stdout.strip():
+                        commit_msg = f"feat(agy): {cmd.prompt[:65]}"
+                        subprocess.run(["git", "commit", "-m", commit_msg], cwd=repo_dir, check=True)
+                        rev_parse = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_dir, capture_output=True, text=True)
+                        commit_hash = rev_parse.stdout.strip()
+                        yield sse_event("status", f"Committed: {commit_hash[:7]} - {commit_msg}")
+                        yield sse_event("status", f"Pushing to origin/{target_branch}...")
+                        subprocess.run(["git", "push", "-u", "origin", target_branch], cwd=repo_dir, check=True)
+                        pushed = True
+                        yield sse_event("status", f"Successfully pushed commit {commit_hash[:7]} to GitHub!")
+                    else:
+                        yield sse_event("status", "Working tree clean; no code changes generated.")
+
+                    # Persist snapshot to GCS
+                    yield sse_event("status", "Persisting workspace snapshot to GCS cache...")
+                    save_repo_snapshot(cmd.repo, repo_dir)
 
                 # Sync build report to Drive
                 preview_url = f"{CLOUD_RUN_BASE_URL}/preview/{cmd.repo}/"
+                hub_cfg = load_config()
                 report_md = (
                     f"# Antigravity Cloud Build Report\n"
                     f"- **Timestamp (UTC):** {datetime.datetime.utcnow().isoformat()}\n"
                     f"- **Repository:** `{GITHUB_OWNER}/{cmd.repo}`\n"
                     f"- **Branch:** `{target_branch}`\n"
-                    f"- **Model Used:** `{used_model}` (Autopilot with full permissions)\n"
                     f"- **Commit:** `{commit_hash}`\n"
                     f"- **Cache Tier:** `{cache_tier}`\n"
                     f"- **Changes Pushed:** `{pushed}`\n\n"
+                    f"{hub_observability.drive_hub_block(final_result)}\n\n"
                     f"## Prompt\n```\n{cmd.prompt}\n```\n\n"
-                    f"## Agent Output\n```\n{full_agent_output[-3000:]}\n```\n"
+                    f"## Agent Output\n```\n{final_result.answer[-3000:]}\n```\n"
+                    f"{hub_observability.drive_footer(hub_cfg)}\n"
                 )
                 drive_sync_status = sync_status_to_5tb_drive(report_md)
 
@@ -900,14 +850,25 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
                     "repo": cmd.repo,
                     "github_repo": f"{GITHUB_OWNER}/{cmd.repo}",
                     "branch": target_branch,
-                    "model_used": used_model,
+                    "model_used": final_result.model,
                     "commit": commit_hash,
                     "changes_pushed": pushed,
                     "cache_tier": cache_tier,
                     "preview_url": preview_url,
-                    "drive_sync": drive_sync_status
+                    "drive_sync": drive_sync_status,
+                    "serving_line": final_result.serving_line,
+                    "hub": {
+                        "tier_used": final_result.tier_used,
+                        "provider": final_result.provider,
+                        "model": final_result.model,
+                        "capability_mode": final_result.capability_mode,
+                        "advisory_banner": final_result.advisory_banner,
+                        "failover_attempts": [a.model_dump() for a in final_result.failover_attempts],
+                    },
                 })
 
+            except HubError as e:
+                yield sse_event("error", f"Model hub error: {e}")
             except Exception as e:
                 yield sse_event("error", str(e))
 
@@ -984,15 +945,37 @@ async def websocket_terminal(websocket: WebSocket, repo: str = "cloud-agy-orches
 
         loop = asyncio.get_running_loop()
 
+        pty_tail: list[bytes] = []
+
         def on_pty_readable():
             try:
                 data = os.read(master_fd, 2048)
                 if data:
+                    pty_tail.append(data)
+                    del pty_tail[:-8]  # keep ~16KB of tail for the exhaustion check
                     asyncio.create_task(websocket.send_bytes(data))
             except (OSError, Exception):
                 pass
 
         loop.add_reader(master_fd, on_pty_readable)
+
+        async def watch_proc_exit():
+            # FR-5.3: honest exhaustion banner — this terminal is agy-only;
+            # failover happens via /chat, never here.
+            rc = await proc.wait()
+            tail = b"".join(pty_tail).decode("utf-8", errors="replace")
+            if agy_exhausted(rc if rc is not None else -1, tail):
+                try:
+                    await websocket.send_text(
+                        "\r\n\x1b[1;33m⚠️ AGY credits exhausted in this terminal.\x1b[0m\r\n"
+                        "\x1b[90mThis terminal is agy-only — send the task via /chat "
+                        "(PWA / Gmail) and the model hub will fail over automatically. "
+                        "Check GET /hub/status.\x1b[0m\r\n"
+                    )
+                except Exception:
+                    pass
+
+        exit_watcher = asyncio.create_task(watch_proc_exit())
 
         try:
             while True:
@@ -1016,6 +999,7 @@ async def websocket_terminal(websocket: WebSocket, repo: str = "cloud-agy-orches
         except (WebSocketDisconnect, Exception):
             pass
         finally:
+            exit_watcher.cancel()
             try:
                 loop.remove_reader(master_fd)
             except Exception:
