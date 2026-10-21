@@ -1005,6 +1005,9 @@ async def websocket_terminal(websocket: WebSocket, repo: str = "cloud-agy-orches
                 pass
             try:
                 proc.terminate()
+                await asyncio.sleep(0.05)
+                if proc.returncode is None:
+                    proc.kill()
             except Exception:
                 pass
     except Exception as e:

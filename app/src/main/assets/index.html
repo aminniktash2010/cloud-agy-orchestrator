@@ -955,8 +955,28 @@
       `).join('');
     }
 
+    // Clean WebSocket Disconnect & Teardown
+    function disconnectActiveShell() {
+      if (wsSession) {
+        const oldSocket = wsSession;
+        wsSession = null;
+        oldSocket.onopen = null;
+        oldSocket.onmessage = null;
+        oldSocket.onerror = null;
+        oldSocket.onclose = null;
+        try {
+          if (oldSocket.readyState === WebSocket.OPEN || oldSocket.readyState === WebSocket.CONNECTING) {
+            oldSocket.close();
+          }
+        } catch (e) {}
+      }
+    }
+
     // View Navigation
     function openProjectTerminal(repo) {
+      // Disconnect any active shell before switching projects
+      disconnectActiveShell();
+
       currentRepo = repo;
       currentSessionId = null; // Auto pick last active session
 
@@ -967,43 +987,43 @@
       document.getElementById('projects-view').classList.add('hidden');
       document.getElementById('terminal-view').classList.add('active');
 
-      window.location.hash = `#project/${repo}`;
+      if (window.location.hash !== `#project/${repo}`) {
+        window.location.hash = `#project/${repo}`;
+      }
 
-      // Initialize xterm if not ready
+      // Initialize or clean xterm state
       if (!term) {
         initTerminal();
       } else {
+        term.reset();
         setTimeout(fitTerminal, 50);
       }
 
-      // Default directly to Interactive PTY Shell tab
+      // Switch directly to Interactive PTY Shell tab
       switchTerminalTab('shell');
 
-      if (term) {
-        term.clear();
-      }
+      // Connect immediately to the project shell with zero delay
+      connectShellSession(true);
 
-      // Load Sessions for this project and auto-connect shell to the selected project and session
-      fetchProjectSessions(repo).then(() => {
-        connectShellSession(true);
-      });
+      // Fetch sessions in background to populate switcher
+      fetchProjectSessions(repo);
 
       // Focus prompt
       const promptInput = document.getElementById('terminal-prompt');
       promptInput.placeholder = `Describe task, UI update, or command for ${repo}...`;
+      promptInput.value = '';
       promptInput.focus();
 
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
     function closeProjectTerminal() {
-      if (wsSession) {
-        try { wsSession.close(); } catch(e){}
-        wsSession = null;
-      }
+      disconnectActiveShell();
       document.getElementById('terminal-view').classList.remove('active');
       document.getElementById('projects-view').classList.remove('hidden');
-      window.location.hash = '';
+      if (window.location.hash) {
+        history.pushState(null, null, ' ');
+      }
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
@@ -1317,9 +1337,10 @@
 
       if (wsSession && (wsSession.readyState === WebSocket.OPEN || wsSession.readyState === WebSocket.CONNECTING)) {
         if (!forceReconnect) return;
-        wsSession.close();
-        wsSession = null;
       }
+
+      // Detach and clean up any existing socket completely
+      disconnectActiveShell();
 
       const wsProto = CLOUD_RUN_BASE.startsWith('https') ? 'wss:' : 'ws:';
       const wsHost = CLOUD_RUN_BASE.replace(/^https?:\/\//, '');
@@ -1331,10 +1352,12 @@
       status.textContent = `Connecting WebSocket PTY for '${repo}'...`;
 
       try {
-        wsSession = new WebSocket(wsUrl);
-        wsSession.binaryType = 'arraybuffer';
+        const socket = new WebSocket(wsUrl);
+        socket.binaryType = 'arraybuffer';
+        wsSession = socket;
 
-        wsSession.onopen = () => {
+        socket.onopen = () => {
+          if (wsSession !== socket) return;
           btn.disabled = false;
           btn.textContent = '✕ Disconnect';
           btn.style.background = '#ef4444';
@@ -1346,7 +1369,8 @@
           }
         };
 
-        wsSession.onmessage = (event) => {
+        socket.onmessage = (event) => {
+          if (wsSession !== socket) return;
           if (typeof event.data === 'string') {
             if (term) term.write(event.data);
           } else {
@@ -1357,12 +1381,15 @@
           if (autoScroll && term) term.scrollToBottom();
         };
 
-        wsSession.onerror = (err) => {
+        socket.onerror = (err) => {
+          if (wsSession !== socket) return;
           console.error('WebSocket PTY error:', err);
           status.textContent = 'WebSocket connection error.';
         };
 
-        wsSession.onclose = () => {
+        socket.onclose = () => {
+          if (wsSession !== socket) return;
+          wsSession = null;
           btn.disabled = false;
           btn.textContent = '⚡ Connect Shell';
           btn.style.background = 'var(--accent)';
@@ -1371,7 +1398,6 @@
           if (term) {
             term.writeln('\r\n\x1b[1;33m[PTY Session Closed]\x1b[0m\r\n');
           }
-          wsSession = null;
         };
       } catch (e) {
         btn.disabled = false;
@@ -1382,8 +1408,7 @@
 
     function toggleShellSession() {
       if (wsSession && (wsSession.readyState === WebSocket.OPEN || wsSession.readyState === WebSocket.CONNECTING)) {
-        wsSession.close();
-        wsSession = null;
+        disconnectActiveShell();
         const btn = document.getElementById('btn-shell-toggle');
         const status = document.getElementById('shell-status');
         btn.textContent = '⚡ Connect Shell';
@@ -1606,6 +1631,19 @@
           openProjectTerminal(repoName);
         }
       }
+
+      window.addEventListener('hashchange', () => {
+        if (window.location.hash.startsWith('#project/')) {
+          const repoName = decodeURIComponent(window.location.hash.replace('#project/', ''));
+          if (PROJECTS.some(p => p.repo === repoName) && (currentRepo !== repoName || !document.getElementById('terminal-view').classList.contains('active'))) {
+            openProjectTerminal(repoName);
+          }
+        } else if (!window.location.hash || window.location.hash === '#' || window.location.hash === '#projects') {
+          if (document.getElementById('terminal-view').classList.contains('active')) {
+            closeProjectTerminal();
+          }
+        }
+      });
     });
   </script>
 </body>
