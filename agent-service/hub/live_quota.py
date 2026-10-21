@@ -35,7 +35,7 @@ _ESTIMATED_DETAIL = {
     "aistudio": "no public quota API — 429-driven breaker is the protection",
     "groq": "no public quota API — 429-driven breaker is the protection",
     "nvidia": "no public quota API — 429-driven breaker is the protection",
-    "openrouter": "no public quota API — 429-driven breaker is the protection",
+    "openrouter": "OpenRouter key poll has not reported yet",
     "xai": "tier disabled",
 }
 
@@ -87,6 +87,9 @@ class LiveQuotaStore:
         self._probe_detail: str = "probe has not run yet"
         # Per-provider poller health: name -> {"healthy": bool, "last_run": iso|None}
         self._providers: dict[str, dict] = {}
+        # Key-poll results (Epic A): provider -> {"remaining_pct", "reset_in",
+        # "detail", "at"}. Writers swap the whole dict atomically.
+        self._poll: dict[str, dict] = {}
 
     def _get_lock(self) -> asyncio.Lock:
         # Lazily created: the store may be constructed at import time with no
@@ -133,6 +136,28 @@ class LiveQuotaStore:
                 "detail": detail,
             }
 
+    async def set_poll_result(
+        self,
+        provider: str,
+        remaining_pct: float | None,
+        reset_in: str | None,
+        detail: str,
+        at: datetime,
+    ) -> None:
+        """Record one key-poll run (Epic A: OpenRouter).
+
+        ``remaining_pct`` may be None (AD-19 step 3: the key reported no
+        usable remaining figure) — the snapshot still labels the tier
+        ``live`` because the *reading* is fresh; the null is honest.
+        """
+        async with self._get_lock():
+            self._poll[provider] = {
+                "remaining_pct": remaining_pct,
+                "reset_in": reset_in,
+                "detail": detail,
+                "at": at,
+            }
+
     # ------------------------------------------------------------------
     # sync reads (request path: cache reads only)
     # ------------------------------------------------------------------
@@ -161,6 +186,8 @@ class LiveQuotaStore:
         for t in cfg.tiers_sorted():
             if t.id == "agy":
                 tiers[t.id] = self._agy_block(cfg, t, now, staleness_s, family_circuits)
+            elif t.id == "openrouter":
+                tiers[t.id] = self._openrouter_block(now, staleness_s)
             else:
                 tiers[t.id] = {
                     "quota_source": "estimated",
@@ -307,6 +334,51 @@ class LiveQuotaStore:
                 }
                 for u in self._probe_unmapped
             ],
+        }
+
+    def _openrouter_block(
+        self, now: datetime, staleness_s: int
+    ) -> dict:
+        """Tier-level block for the OpenRouter key poll (Epic A).
+
+        Mirrors the AGY degrade logic: fresh + healthy -> ``live``;
+        otherwise ``estimated`` with an honest detail (AD-17 — the staleness
+        downgrade is computed here, at read time).
+        """
+        health = self._providers.get("openrouter", {})
+        healthy = health.get("healthy", True)
+        poll = self._poll.get("openrouter")
+        at = poll["at"] if poll else None
+        quota_at = at.isoformat() if at else None
+        age_s = (now - at).total_seconds() if at else None
+        fresh = at is not None and age_s is not None and age_s <= staleness_s
+
+        if healthy and fresh:
+            return {
+                "quota_source": "live",
+                "quota_updated_at": quota_at,
+                "remaining_pct": poll["remaining_pct"],
+                "reset_in": poll["reset_in"],
+                "detail": poll["detail"],
+            }
+
+        if not healthy:
+            detail = health.get("detail") or "OpenRouter key poll failing"
+        elif at is not None:
+            detail = (
+                "OpenRouter key poll stale "
+                f"(last live reading {_age_note(at, now)})"
+            )
+        else:
+            detail = _ESTIMATED_DETAIL["openrouter"]
+        if at is not None and not healthy:
+            detail += f" (last live reading {_age_note(at, now)})"
+        return {
+            "quota_source": "estimated",
+            "quota_updated_at": quota_at,
+            "remaining_pct": None,
+            "reset_in": None,
+            "detail": detail,
         }
 
     @staticmethod
