@@ -16,12 +16,14 @@ import asyncio
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
 from hub.adapters import ADAPTER_REGISTRY
 from hub.adapters.base import ProviderAdapter
 from hub.breaker import CircuitBreaker
 from hub.config import ConfigLoader
+from hub.live_quota import LiveQuotaStore
 from hub.observability import (
     advisory_banner,
     log_attempt,
@@ -29,7 +31,7 @@ from hub.observability import (
     status_payload,
 )
 from hub.quota import QuotaTracker, SpendLedger, truncate_prompt
-from hub.signals import parse_retry_after
+from hub.signals import agy_family_of, parse_retry_after
 from hub.types import (
     AdapterResponse,
     AttemptOutcome,
@@ -58,12 +60,22 @@ class ModelHub:
         breaker: CircuitBreaker | None = None,
         quota: QuotaTracker | None = None,
         ledger: SpendLedger | None = None,
+        family_breaker: CircuitBreaker | None = None,
     ) -> None:
         self._config_loader = config_loader or ConfigLoader()
         self._breaker: CircuitBreaker | None = breaker
         self._quota = quota or QuotaTracker()
         self._ledger = ledger or SpendLedger()
         self._quota_hints: dict[str, dict] = {}
+        # Live-quota Epic C: per-family breakers (composite keys "agy:<family>")
+        # + the advisory telemetry store (AD-15, AD-10).
+        self._family_breaker: CircuitBreaker | None = family_breaker
+        self._live_quota = LiveQuotaStore()
+
+    @property
+    def live_quota(self) -> LiveQuotaStore:
+        """Advisory live-quota store (read by the quota poller + /hub/status)."""
+        return self._live_quota
 
     # ------------------------------------------------------------------
     # internals
@@ -76,7 +88,84 @@ class ModelHub:
         else:
             b = cfg.breaker
             self._breaker.configure(b.exhaustions_to_open, b.window_s, b.cooldown_s)
+        # Family breaker thresholds come from the quota config block (AD-15).
+        fb = cfg.quota.family_breaker
+        if self._family_breaker is None:
+            self._family_breaker = CircuitBreaker(
+                fb.exhaustions_to_open, fb.window_s, fb.cooldown_s
+            )
+        else:
+            self._family_breaker.configure(
+                fb.exhaustions_to_open, fb.window_s, fb.cooldown_s
+            )
         return cfg
+
+    def _agy_cfg(self, cfg: HubConfig) -> dict:
+        """The quota.providers.agy config block as a plain dict."""
+        providers = cfg.quota.providers or {}
+        agy = providers.get("agy")
+        return agy.model_dump() if agy is not None else {}
+
+    def _family_models(
+        self, tier: TierConfig, request: HubRequest
+    ) -> tuple[list[tuple[str, list[str]]], list[str]]:
+        """Groups a tier's models into (family_id, models) walk order (AD-15).
+
+        Returns (walk_groups, skipped_families). Non-AGY tiers walk a single
+        "default" group (today's behavior). AGY families walk closed-first in
+        config order; open families are skipped entirely (locked auto-skip=yes)
+        and reported so the caller can record them. Empty walk -> the caller
+        skips the whole tier ("skip: all_families_open"). A model matching no
+        family lands in "default" (still attempted).
+        """
+        models = self._models_for_tier(tier, request)
+        if tier.id != "agy":
+            return [("default", models)], []
+        assert self._family_breaker is not None
+        cfg = self._config()
+        agy_cfg = self._agy_cfg(cfg)
+        taxonomy = self._live_quota.taxonomy()
+        groups: dict[str, list[str]] = {}
+        order: list[str] = []
+        for m in models:
+            fid = agy_family_of(m, "", agy_cfg, taxonomy) or "default"
+            if fid not in groups:
+                groups[fid] = []
+                order.append(fid)
+            groups[fid].append(m)
+        walk, skipped = [], []
+        for fid in order:
+            if self._family_breaker.is_open(f"agy:{fid}"):
+                skipped.append(fid)
+            else:
+                walk.append((fid, groups[fid]))
+        return walk, skipped
+
+    def _note_family_result(
+        self, tier: TierConfig, model: str, outcome: AttemptOutcome, reason_text: str
+    ) -> None:
+        """Records per-family breaker state for Tier 0 (AD-15).
+
+        Family is re-inferred from the model name AND the failure output, so
+        family-specific error text is honoured. Unparseable output ("default")
+        falls back to legacy whole-tier behavior (FR-3.3) — no family note.
+        """
+        if tier.id != "agy" or self._family_breaker is None:
+            return
+        cfg = self._config()
+        fid = (
+            agy_family_of(model, reason_text, self._agy_cfg(cfg),
+                          self._live_quota.taxonomy())
+            or "default"
+        )
+        if fid == "default":
+            return
+        key = f"agy:{fid}"
+        if outcome == AttemptOutcome.SUCCESS:
+            self._family_breaker.note_success(key)
+        elif outcome == AttemptOutcome.EXHAUSTED:
+            self._family_breaker.note_exhaustion(key)
+            logger.info("hub agy family '%s' exhaustion noted (model '%s')", fid, model)
 
     @staticmethod
     def _force_exhaust_tier() -> str:
@@ -151,6 +240,22 @@ class ModelHub:
             except Exception:  # noqa: BLE001
                 key_status[tier.id] = False
         assert self._breaker is not None
+        # Per-family circuit states for the AGY live_quota.families rows.
+        family_circuits: dict[str, str] = {}
+        if self._family_breaker is not None:
+            fam_snap = self._family_breaker.snapshot()
+            known_families = set(self._agy_cfg(cfg).get("families", {}))
+            known_families.update(self._live_quota.taxonomy().values())
+            for fid in known_families:
+                family_circuits[fid] = fam_snap.get(f"agy:{fid}", {}).get(
+                    "circuit", "closed"
+                )
+        live_quota = self._live_quota.snapshot(
+            cfg,
+            datetime.now(timezone.utc),
+            cfg.quota.staleness_s,
+            family_circuits,
+        )
         return status_payload(
             cfg,
             config_source=self._config_loader.source,
@@ -159,6 +264,7 @@ class ModelHub:
             quota_hints=dict(self._quota_hints),
             key_status=key_status,
             spend_today_usd=self._ledger.spend_today_usd(),
+            live_quota=live_quota,
         )
 
     # ------------------------------------------------------------------
@@ -191,8 +297,20 @@ class ModelHub:
                 self._record(attempts, tier, "", "skipped", "skip: no models configured")
                 continue
 
+            # Tier 0 walks per-family groups (closed-first, open families
+            # skipped — locked auto-skip). Flattened to (family, model) pairs
+            # so the break/continue flow below is unchanged.
+            family_groups, skipped_families = self._family_models(tier, request)
+            for fid in skipped_families:
+                self._record(attempts, tier, "", "skipped",
+                             f"skip: family_circuit_open (agy:{fid})")
+            if tier.id == "agy" and not family_groups:
+                self._record(attempts, tier, "", "skipped", "skip: all_families_open")
+                continue
+            model_pairs = [(fid, m) for fid, ms in family_groups for m in ms]
+
             tier_had_attempts = False
-            for model in models:
+            for family_id, model in model_pairs:
                 tier_had_attempts = True
                 started = time.monotonic()
                 if force_exhaust == tier.id:
@@ -221,6 +339,7 @@ class ModelHub:
                 if outcome == AttemptOutcome.SUCCESS:
                     assert self._breaker is not None
                     self._breaker.note_success(tier.id)
+                    self._note_family_result(tier, model, AttemptOutcome.SUCCESS, "")
                     self._record(attempts, tier, model, outcome.value, "",
                                  latency_ms,
                                  usage=resp.usage if isinstance(resp, AdapterResponse) else {},
@@ -250,6 +369,10 @@ class ModelHub:
                 reason = self._answer_text(resp)[:300]
                 self._record(attempts, tier, model, outcome.value, reason, latency_ms)
 
+                if outcome == AttemptOutcome.EXHAUSTED:
+                    # Per-family breaker note (AD-15); "default" falls back to
+                    # the legacy whole-tier exhaustion recorded at tier end.
+                    self._note_family_result(tier, model, outcome, reason)
                 if outcome == AttemptOutcome.UNKNOWN_MODEL:
                     continue  # next model, same tier
                 if outcome in (AttemptOutcome.EXHAUSTED, AttemptOutcome.TRANSIENT):
@@ -354,9 +477,21 @@ class ModelHub:
                 self._record(attempts, tier, "", "skipped", "skip: no models configured")
                 continue
 
+            # Tier 0 walks per-family groups (closed-first, open families
+            # skipped — locked auto-skip). Flattened to (family, model) pairs
+            # so the break/continue flow below is unchanged.
+            family_groups, skipped_families = self._family_models(tier, request)
+            for fid in skipped_families:
+                self._record(attempts, tier, "", "skipped",
+                             f"skip: family_circuit_open (agy:{fid})")
+            if tier.id == "agy" and not family_groups:
+                self._record(attempts, tier, "", "skipped", "skip: all_families_open")
+                continue
+            model_pairs = [(fid, m) for fid, ms in family_groups for m in ms]
+
             tier_had_attempts = False
             live = tier.capability == CapabilityMode.AGENT_LOOP  # forward live, else buffer
-            for mi, model in enumerate(models):
+            for pi, (family_id, model) in enumerate(model_pairs):
                 tier_had_attempts = True
                 started = time.monotonic()
                 buffered: list[HubEvent] = []
@@ -415,6 +550,7 @@ class ModelHub:
                 if outcome == AttemptOutcome.SUCCESS:
                     assert self._breaker is not None
                     self._breaker.note_success(tier.id)
+                    self._note_family_result(tier, model, AttemptOutcome.SUCCESS, "")
                     usage = resp.usage if isinstance(resp, AdapterResponse) else {}
                     self._record(attempts, tier, model, outcome.value, "", latency_ms,
                                  usage=usage, quota_hints=quota_hints)
@@ -434,10 +570,12 @@ class ModelHub:
                 reason = self._answer_text(resp)[:300]
                 self._record(attempts, tier, model, outcome.value, reason, latency_ms)
 
+                if outcome == AttemptOutcome.EXHAUSTED:
+                    self._note_family_result(tier, model, outcome, reason)
                 if outcome == AttemptOutcome.UNKNOWN_MODEL:
                     # Intra-tier model advance: restore the pre-hub banner so the
                     # PWA shows the switch live (cross-tier switches use tier_switch).
-                    nxt = models[mi + 1] if mi + 1 < len(models) else None
+                    nxt = model_pairs[pi + 1][1] if pi + 1 < len(model_pairs) else None
                     if nxt is not None:
                         yield HubEvent(kind="status", payload={
                             "text": f"⚠️ Model '{model}' unavailable — "

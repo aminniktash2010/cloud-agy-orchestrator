@@ -843,6 +843,16 @@
       line-height: 1.4;
       word-break: break-word;
     }
+    /* Live-quota additions (Epic C) — additive, existing styles untouched */
+    .hub-badge.live { color: var(--success); border-color: rgba(16,185,129,0.4); background: rgba(16,185,129,0.08); }
+    .hub-badge.teal { color: #2dd4bf; border-color: rgba(45,212,191,0.35); background: rgba(45,212,191,0.08); }
+    .hub-asof { color: var(--muted); font-size: 0.68rem; }
+    .hub-detail { color: var(--muted); font-size: 0.7rem; margin-top: 0.25rem; line-height: 1.35; }
+    .hub-families { margin-top: 0.45rem; border-top: 1px dashed var(--border); padding-top: 0.4rem; display: grid; gap: 0.3rem; }
+    .hub-family { font-size: 0.72rem; color: var(--text); }
+    .hub-family .fam-label { font-weight: 600; }
+    .hub-family .fam-meta { color: var(--muted); }
+    .hub-family.fam-open .fam-label { color: var(--warning); }
   </style>
 </head>
 <body>
@@ -1097,6 +1107,62 @@
       return `<span class="hub-badge">${hubEsc(cost)}</span>`;
     }
 
+    // Live-quota (Epic C): source badge + "as of" for the additive live_quota block.
+    function hubQuotaBadge(src) {
+      if (src === 'live') return '<span class="hub-badge live">📡 live</span>';
+      if (src === 'headers') return '<span class="hub-badge info">🌐 headers</span>';
+      if (src === 'measured') return '<span class="hub-badge teal">📏 measured</span>';
+      return '<span class="hub-badge">🔮 estimated</span>';
+    }
+
+    function hubQuotaLine(t) {
+      // Preferred: the additive live_quota block. Falls back to the static
+      // requests/cap rendering when the block is absent (backward compatible).
+      const lq = t.live_quota || null;
+      if (!lq || (lq.remaining_pct == null && !lq.detail && !(lq.families || []).length)) {
+        return null;
+      }
+      const asof = lq.quota_updated_at
+        ? ' <span class="hub-asof">as of ' + new Date(lq.quota_updated_at).toLocaleTimeString() + '</span>'
+        : '';
+      const pct = (lq.remaining_pct == null) ? '' : lq.remaining_pct.toFixed(0) + '% left';
+      const rst = lq.reset_in ? ' · resets in ' + hubEsc(lq.reset_in) : '';
+      const head = (pct || rst) ? `📊 ${hubEsc(pct)}${rst} ` : '📊 ';
+      const det = lq.detail ? `<div class="hub-detail">${hubEsc(lq.detail)}</div>` : '';
+      return `${head}${hubQuotaBadge(lq.quota_source)}${asof}${det}`;
+    }
+
+    function hubFamilyRows(t) {
+      // AGY per-family rows (+ unmapped buckets), mirroring the usage page.
+      const lq = t.live_quota || null;
+      if (t.id !== 'agy' || !lq) return '';
+      const fams = lq.families || [];
+      const unmapped = lq.unmapped_buckets || [];
+      if (!fams.length && !unmapped.length) return '';
+      const rows = fams.map(f => {
+        const pct = (f.remaining_pct == null) ? '—' : f.remaining_pct.toFixed(0) + '%';
+        const rst = f.reset_in ? ` · ${hubEsc(f.reset_in)}` : '';
+        const circ = f.circuit === 'open' ? '🟠' : '🟢';
+        const note = f.note ? ` <span class="fam-meta">(${hubEsc(f.note)})</span>` : '';
+        const cls = 'hub-family' + (f.circuit === 'open' ? ' fam-open' : '');
+        return `<div class="${cls}">${circ} <span class="fam-label">${hubEsc(f.label || f.id)}</span> <span class="fam-meta">${hubEsc(pct)}${rst}</span>${note}</div>`;
+      });
+      const extra = unmapped.map(u => {
+        const pct = (u.remaining_pct == null) ? '—' : u.remaining_pct.toFixed(0) + '%';
+        return `<div class="hub-family"><span class="fam-meta">▫️ ${hubEsc(u.name || 'unmapped bucket')} ${hubEsc(pct)}</span></div>`;
+      });
+      return `<div class="hub-families">${rows.join('')}${extra.join('')}</div>`;
+    }
+
+    function hubProbeWarn(data) {
+      // Subtle warning when the AGY probe is unhealthy — never blocking.
+      try {
+        const p = data.poller && data.poller.providers && data.poller.providers.agy_probe;
+        if (p && p.healthy === false) return ' <span class="hub-badge warn" title="quota probe unhealthy">⚠️ probe</span>';
+      } catch (e) { /* ignore */ }
+      return '';
+    }
+
     function renderHubStatus(data) {
       const wrap = document.getElementById('hub-tiers');
       if (!wrap) return;
@@ -1128,15 +1194,19 @@
         const usage = (t.daily_request_cap == null)
           ? `${t.requests_today || 0} / ∞ today`
           : `${t.requests_today || 0} / ${t.daily_request_cap} today`;
+        // Live-quota (Epic C): prefer the additive live_quota rendering,
+        // fall back to the static line when the block is absent.
+        const quotaInner = hubQuotaLine(t) || `📊 ${hubEsc(usage)}`;
         const cardCls = 'hub-tier'
           + (t.enabled ? '' : ' tier-disabled')
           + (t.circuit === 'open' ? ' tier-open' : '');
         const models = (t.models || []).map(hubEsc).join(', ');
         return `<div class="${cardCls}">
           <div class="hub-tier-order">#${(t.order || 0) + 1}</div>
-          <div class="hub-tier-name">${hubEsc(t.provider)}</div>
+          <div class="hub-tier-name">${hubEsc(t.provider)}${hubProbeWarn(data)}</div>
           <div class="hub-tier-badges">${cap}${en}${key}${circuit}${hubCostBadge(t.cost)}</div>
-          <div class="hub-tier-usage">📊 ${hubEsc(usage)}</div>
+          <div class="hub-tier-usage">${quotaInner}</div>
+          ${hubFamilyRows(t)}
           <div class="hub-tier-models">${models}</div>
         </div>`;
       }).join('');

@@ -152,6 +152,37 @@ DEFAULT_LADDER: dict = {
     ],
     "breaker": {"exhaustions_to_open": 3, "window_s": 600, "cooldown_s": 900},
     "global": {"max_input_chars": 200000, "config_ttl_s": 60},
+    # Live-quota subsystem (Epic C): AGY family taxonomy seed + CLI probe knobs.
+    # pb_field_roles stays null until the build-time Cloud Run capture (C-S7)
+    # confirms which numeric protobuf field is quota_remaining — until then the
+    # probe degrades honestly to estimated/detail-only, never guessed numbers.
+    "quota": {
+        "staleness_s": 1800,
+        "poller_interval_s": 600,
+        "probe_interval_s": 600,
+        "probe_initial_delay_s": 60,
+        "family_breaker": {"exhaustions_to_open": 3, "window_s": 600, "cooldown_s": 900},
+        "providers": {
+            "agy": {
+                "probe_enabled": True,
+                "pb_field_roles": None,
+                "families": {
+                    # Order matters: substring ties resolve in config order, so
+                    # the distinctive "argon" family precedes the generic
+                    # "gemini" (e.g. "gemini-4-argon" is Argon-class). The
+                    # first real Cloud Run probe run (C-S7) confirms this
+                    # against the live model list.
+                    "argon": {"label": "Gemini Argon-class", "match": ["argon"]},
+                    "gemini": {"label": "Gemini Models", "match": ["gemini"]},
+                    "claude_gpt": {"label": "Claude and GPT models", "match": ["claude", "gpt"]},
+                },
+                "family_markers": {
+                    "claude_gpt": ["claude", "anthropic"],
+                    "argon": ["argon"],
+                },
+            },
+        },
+    },
 }
 
 
