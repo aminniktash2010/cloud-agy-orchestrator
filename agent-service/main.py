@@ -903,15 +903,23 @@ async def websocket_terminal(websocket: WebSocket, repo: str = "cloud-agy-orches
     await websocket.accept()
 
     try:
+        repo_clean = (repo or "cloud-agy-orchestrator").strip()
+
+        # Ensure repository exists and is isolated in /workspace/{repo_clean}
+        try:
+            repo_dir, _ = prepare_cached_repo(repo_clean, "main")
+        except Exception as e:
+            logger.warning(f"prepare_cached_repo fallback for {repo_clean}: {e}")
+            repo_dir = HOT_WORKSPACE_ROOT / repo_clean
+            repo_dir.mkdir(parents=True, exist_ok=True)
+
         master_fd, slave_fd = pty.openpty()
         winsize = struct.pack("HHHH", 32, 120, 0, 0)
         fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
 
-        repo_dir = HOT_WORKSPACE_ROOT / repo
-        if not repo_dir.exists():
-            repo_dir = HOT_WORKSPACE_ROOT if HOT_WORKSPACE_ROOT.exists() else Path.cwd()
-
-        env = build_isolated_env(repo_dir) if repo_dir.exists() else os.environ.copy()
+        env = build_isolated_env(repo_dir)
+        env["AGY_TARGET_REPO"] = repo_clean
+        env["PWD"] = str(repo_dir)
         if conversation_id:
             env["AGY_CONVERSATION_ID"] = conversation_id
             if conversation_id == "new":

@@ -10,8 +10,11 @@
 
 set -e
 
-# 1. Ensure working directory is active project if invoked from root, /, or /app
-if [ "$PWD" = "/" ] || [ "$PWD" = "/root" ] || [ "$PWD" = "/app" ]; then
+# 1. Ensure working directory is the targeted project (never root, /, or /app)
+if [ -n "$AGY_TARGET_REPO" ]; then
+    mkdir -p "/workspace/$AGY_TARGET_REPO"
+    cd "/workspace/$AGY_TARGET_REPO"
+elif [ "$PWD" = "/" ] || [ "$PWD" = "/root" ] || [ "$PWD" = "/app" ]; then
     if [ -d "/workspace/cloud-agy-orchestrator" ]; then
         cd "/workspace/cloud-agy-orchestrator"
     elif [ -d "/workspace" ]; then

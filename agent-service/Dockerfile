@@ -34,10 +34,10 @@ RUN mkdir -p /workspace/cloud-agy-orchestrator/.agy_session \
     && rm -f /tmp/default_session.tar.gz
 
 # System-wide auto-cd to workspace so any container entry (interactive, docker exec, sh, bash) never lands in root
-RUN printf 'if [ "$PWD" = "/" ] || [ "$PWD" = "/root" ] || [ "$PWD" = "/app" ]; then cd /workspace/cloud-agy-orchestrator 2>/dev/null || true; fi\n' >> /etc/bash.bashrc \
-    && printf 'if [ "$PWD" = "/" ] || [ "$PWD" = "/root" ] || [ "$PWD" = "/app" ]; then cd /workspace/cloud-agy-orchestrator 2>/dev/null || true; fi\n' >> /etc/profile \
-    && printf '\nif [ "$PWD" = "/" ] || [ "$PWD" = "/root" ] || [ "$PWD" = "/app" ]; then cd /workspace/cloud-agy-orchestrator; fi\nif [ -t 0 ]; then exec /usr/local/bin/agy; fi\n' >> /root/.bashrc \
-    && printf '#!/bin/bash\nTARGET="${1:-/workspace/cloud-agy-orchestrator}"\nmkdir -p "$TARGET" && cd "$TARGET"\nexec /usr/local/bin/agy "${@:2}"\n' > /usr/local/bin/open-agy \
+RUN printf 'if [ -n "$AGY_TARGET_REPO" ]; then mkdir -p "/workspace/$AGY_TARGET_REPO" 2>/dev/null; cd "/workspace/$AGY_TARGET_REPO" 2>/dev/null || true; elif [ "$PWD" = "/" ] || [ "$PWD" = "/root" ] || [ "$PWD" = "/app" ]; then cd /workspace/cloud-agy-orchestrator 2>/dev/null || true; fi\n' >> /etc/bash.bashrc \
+    && printf 'if [ -n "$AGY_TARGET_REPO" ]; then mkdir -p "/workspace/$AGY_TARGET_REPO" 2>/dev/null; cd "/workspace/$AGY_TARGET_REPO" 2>/dev/null || true; elif [ "$PWD" = "/" ] || [ "$PWD" = "/root" ] || [ "$PWD" = "/app" ]; then cd /workspace/cloud-agy-orchestrator 2>/dev/null || true; fi\n' >> /etc/profile \
+    && printf '\nif [ -n "$AGY_TARGET_REPO" ]; then mkdir -p "/workspace/$AGY_TARGET_REPO" 2>/dev/null; cd "/workspace/$AGY_TARGET_REPO" 2>/dev/null || true; elif [ "$PWD" = "/" ] || [ "$PWD" = "/root" ] || [ "$PWD" = "/app" ]; then cd /workspace/cloud-agy-orchestrator 2>/dev/null || true; fi\nif [ -t 0 ]; then exec /usr/local/bin/agy; fi\n' >> /root/.bashrc \
+    && printf '#!/bin/bash\nTARGET="${1:-${AGY_TARGET_REPO:-cloud-agy-orchestrator}}"\nTARGET_PATH="/workspace/$TARGET"\nmkdir -p "$TARGET_PATH" && cd "$TARGET_PATH"\nexec /usr/local/bin/agy "${@:2}"\n' > /usr/local/bin/open-agy \
     && chmod +x /usr/local/bin/open-agy
 
 WORKDIR /app

@@ -976,8 +976,17 @@
         setTimeout(fitTerminal, 50);
       }
 
-      // Load Sessions for this project
-      fetchProjectSessions(repo);
+      // Default directly to Interactive PTY Shell tab
+      switchTerminalTab('shell');
+
+      if (term) {
+        term.clear();
+      }
+
+      // Load Sessions for this project and auto-connect shell to the selected project and session
+      fetchProjectSessions(repo).then(() => {
+        connectShellSession(true);
+      });
 
       // Focus prompt
       const promptInput = document.getElementById('terminal-prompt');
@@ -1106,9 +1115,9 @@
         term.writeln(`\r\n\x1b[1;36m🔄 Switched to Session: ${sessionId}\x1b[0m`);
       }
 
-      // If interactive websocket shell is connected, notify user
-      if (wsSession && wsSession.readyState === WebSocket.OPEN) {
-        term.writeln('\x1b[33mNote: PTY Shell connected. Run `agy -c` to attach to this session directly.\x1b[0m');
+      // Reconnect interactive shell if on shell tab
+      if (activeTab === 'shell') {
+        connectShellSession(true);
       }
     }
 
@@ -1121,6 +1130,11 @@
 
       if (term) {
         term.writeln('\r\n\x1b[1;32m✨ New Session mode selected (Fresh conversation thread)\x1b[0m');
+      }
+
+      // Reconnect interactive shell if on shell tab
+      if (activeTab === 'shell') {
+        connectShellSession(true);
       }
     }
 
@@ -1212,8 +1226,7 @@
       term.writeln(`\x1b[1;36m  🚀 ANTIGRAVITY CLOUD COMMAND CENTER • [${currentRepo}]\x1b[0m`);
       term.writeln('\x1b[90m  Cloud Run v2 (us-central1) • Zero-Local-Compute • PTY ANSI Stream\x1b[0m');
       term.writeln('\x1b[1;36m==================================================================\x1b[0m');
-      term.writeln('\x1b[32m✔ Connected to project environment.\x1b[0m Select a session above or run a prompt below,');
-      term.writeln('\x1b[90mor switch to the Interactive PTY Shell tab for direct bash access.\x1b[0m\r\n');
+      term.writeln('\x1b[32m✔ Connected to project environment.\x1b[0m Direct shell locked to /workspace/' + currentRepo + '\r\n');
     }
 
     function fitTerminal() {
@@ -1297,19 +1310,15 @@
       }
     }
 
-    function toggleShellSession() {
+    function connectShellSession(forceReconnect = false) {
       const btn = document.getElementById('btn-shell-toggle');
       const status = document.getElementById('shell-status');
       const repo = currentRepo;
 
       if (wsSession && (wsSession.readyState === WebSocket.OPEN || wsSession.readyState === WebSocket.CONNECTING)) {
+        if (!forceReconnect) return;
         wsSession.close();
         wsSession = null;
-        btn.textContent = '⚡ Connect Shell';
-        btn.style.background = 'var(--accent)';
-        btn.style.color = '#0b0f19';
-        status.textContent = 'Session closed. Click Connect Shell to open a new PTY session.';
-        return;
       }
 
       const wsProto = CLOUD_RUN_BASE.startsWith('https') ? 'wss:' : 'ws:';
@@ -1330,9 +1339,9 @@
           btn.textContent = '✕ Disconnect';
           btn.style.background = '#ef4444';
           btn.style.color = '#ffffff';
-          status.textContent = `Connected to Cloud Run PTY (${repo}). Type directly in terminal.`;
+          status.textContent = `Connected to Cloud Run PTY: /workspace/${repo}. Full permissions active.`;
           if (term) {
-            term.writeln(`\r\n\x1b[1;32m✔ Connected to interactive PTY for ${repo}\x1b[0m\r\n`);
+            term.writeln(`\r\n\x1b[1;32m✔ Connected to interactive PTY for ${repo} [${currentSessionId || 'Last Active'}]\x1b[0m\r\n`);
             fitTerminal();
           }
         };
@@ -1358,7 +1367,7 @@
           btn.textContent = '⚡ Connect Shell';
           btn.style.background = 'var(--accent)';
           btn.style.color = '#0b0f19';
-          status.textContent = 'PTY session disconnected.';
+          status.textContent = 'PTY session disconnected. Click Connect Shell to resume.';
           if (term) {
             term.writeln('\r\n\x1b[1;33m[PTY Session Closed]\x1b[0m\r\n');
           }
@@ -1368,6 +1377,21 @@
         btn.disabled = false;
         btn.textContent = '⚡ Connect Shell';
         status.textContent = `Failed to connect: ${e.message}`;
+      }
+    }
+
+    function toggleShellSession() {
+      if (wsSession && (wsSession.readyState === WebSocket.OPEN || wsSession.readyState === WebSocket.CONNECTING)) {
+        wsSession.close();
+        wsSession = null;
+        const btn = document.getElementById('btn-shell-toggle');
+        const status = document.getElementById('shell-status');
+        btn.textContent = '⚡ Connect Shell';
+        btn.style.background = 'var(--accent)';
+        btn.style.color = '#0b0f19';
+        status.textContent = 'Session closed. Click Connect Shell to open a new PTY session.';
+      } else {
+        connectShellSession(true);
       }
     }
 
