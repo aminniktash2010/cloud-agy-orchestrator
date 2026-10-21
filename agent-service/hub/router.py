@@ -204,6 +204,8 @@ class ModelHub:
                             timeout_s=tier.per_task_timeout_s,
                             max_output_tokens=tier.per_task_max_output_tokens,
                             repo_ctx=request.repo_ctx,
+                            conversation_id=request.conversation_id,
+                            continue_session=request.continue_session,
                         )
                     except HubError:
                         raise
@@ -276,6 +278,8 @@ class ModelHub:
                 timeout_s=tier.per_task_timeout_s,
                 max_output_tokens=tier.per_task_max_output_tokens,
                 repo_ctx=request.repo_ctx,
+                conversation_id=request.conversation_id,
+                continue_session=request.continue_session,
             )
         except Exception as e:  # noqa: BLE001
             return AttemptOutcome.TRANSIENT, f"retry error: {e}"[:500]
@@ -352,7 +356,7 @@ class ModelHub:
 
             tier_had_attempts = False
             live = tier.capability == CapabilityMode.AGENT_LOOP  # forward live, else buffer
-            for model in models:
+            for mi, model in enumerate(models):
                 tier_had_attempts = True
                 started = time.monotonic()
                 buffered: list[HubEvent] = []
@@ -369,6 +373,8 @@ class ModelHub:
                             timeout_s=tier.per_task_timeout_s,
                             max_output_tokens=tier.per_task_max_output_tokens,
                             repo_ctx=request.repo_ctx,
+                            conversation_id=request.conversation_id,
+                            continue_session=request.continue_session,
                         ):
                             if ev.kind == "done":
                                 payload = ev.payload or {}
@@ -429,6 +435,13 @@ class ModelHub:
                 self._record(attempts, tier, model, outcome.value, reason, latency_ms)
 
                 if outcome == AttemptOutcome.UNKNOWN_MODEL:
+                    # Intra-tier model advance: restore the pre-hub banner so the
+                    # PWA shows the switch live (cross-tier switches use tier_switch).
+                    nxt = models[mi + 1] if mi + 1 < len(models) else None
+                    if nxt is not None:
+                        yield HubEvent(kind="status", payload={
+                            "text": f"⚠️ Model '{model}' unavailable — "
+                                    f"🔄 switching to '{nxt}' (same tier)…"})
                     continue
                 if outcome in (AttemptOutcome.EXHAUSTED, AttemptOutcome.TRANSIENT):
                     break

@@ -45,12 +45,20 @@ class FakeAdapter(ProviderAdapter):
     def __init__(self):
         pass
 
-    async def run(self, prompt, model, tier, timeout_s, max_output_tokens, repo_ctx=None):
+    LAST_KWARGS: dict = {}
+
+    async def run(self, prompt, model, tier, timeout_s, max_output_tokens, repo_ctx=None,
+                  conversation_id=None, continue_session=True):
+        FakeAdapter.LAST_KWARGS = {"conversation_id": conversation_id,
+                                   "continue_session": continue_session}
         return self._next(model)
 
-    async def run_stream(self, prompt, model, tier, timeout_s, max_output_tokens, repo_ctx=None):
+    async def run_stream(self, prompt, model, tier, timeout_s, max_output_tokens, repo_ctx=None,
+                         conversation_id=None, continue_session=True):
         from hub.types import HubEvent
 
+        FakeAdapter.LAST_KWARGS = {"conversation_id": conversation_id,
+                                   "continue_session": continue_session}
         outcome, payload = self._next(model)
         if isinstance(payload, AdapterResponse) and outcome == AttemptOutcome.SUCCESS:
             yield HubEvent(kind="log", payload=payload.text)
@@ -71,8 +79,10 @@ def registry_with_fake(monkeypatch):
 @pytest.fixture(autouse=True)
 def reset_fake_script():
     FakeAdapter.SCRIPT = {}
+    FakeAdapter.LAST_KWARGS = {}
     yield
     FakeAdapter.SCRIPT = {}
+    FakeAdapter.LAST_KWARGS = {}
 
 
 class StubConfigLoader:

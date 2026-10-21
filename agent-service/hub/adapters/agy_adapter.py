@@ -59,11 +59,13 @@ class AgyAdapter(ProviderAdapter):
         timeout_s: int,
         max_output_tokens: int,
         repo_ctx: Any = None,
+        conversation_id: str | None = None,
+        continue_session: bool = True,
     ) -> tuple[AttemptOutcome, Any]:
         if repo_ctx is None:
             return AttemptOutcome.BAD_REQUEST, "AgyAdapter requires repo_ctx (repo prep is the handler's job)"
         repo_dir = Path(repo_ctx.repo_dir)
-        cmd_args = self._cmd_args(prompt, model, repo_ctx, None, True)
+        cmd_args = self._cmd_args(prompt, model, repo_ctx, conversation_id, continue_session)
 
         started = time.monotonic()
         try:
@@ -100,6 +102,8 @@ class AgyAdapter(ProviderAdapter):
         timeout_s: int,
         max_output_tokens: int,
         repo_ctx: Any = None,
+        conversation_id: str | None = None,
+        continue_session: bool = True,
     ) -> AsyncIterator[HubEvent]:
         if repo_ctx is None:
             yield HubEvent(kind="error", payload="AgyAdapter requires repo_ctx")
@@ -122,7 +126,7 @@ class AgyAdapter(ProviderAdapter):
         yield HubEvent(kind="log", payload=f"  \x1b[1;33mCache Tier:\x1b[0m {repo_ctx.cache_tier}\r\n")
         yield HubEvent(kind="log", payload="\x1b[1;36m====================================================\x1b[0m\r\n\r\n")
 
-        cmd_args = self._cmd_args(prompt, model, repo_ctx, None, True)
+        cmd_args = self._cmd_args(prompt, model, repo_ctx, conversation_id, continue_session)
 
         pty_env = dict(repo_ctx.env)
         pty_env["TERM"] = "xterm-256color"

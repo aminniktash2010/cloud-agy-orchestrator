@@ -28,8 +28,13 @@ class ProviderAdapter(ABC):
         timeout_s: int,
         max_output_tokens: int,
         repo_ctx: Any = None,
+        conversation_id: str | None = None,
+        continue_session: bool = True,
     ) -> tuple[AttemptOutcome, Any]:
-        """Collect mode. Returns (outcome, AdapterResponse | reason-str)."""
+        """Collect mode. Returns (outcome, AdapterResponse | reason-str).
+
+        ``conversation_id`` / ``continue_session`` are session-selection hints
+        (AC-4); only session-bearing adapters (agy) act on them."""
 
     @abstractmethod
     async def run_stream(
@@ -40,6 +45,8 @@ class ProviderAdapter(ABC):
         timeout_s: int,
         max_output_tokens: int,
         repo_ctx: Any = None,
+        conversation_id: str | None = None,
+        continue_session: bool = True,
     ) -> AsyncIterator[HubEvent]:
         """Streaming mode: yields HubEvent(kind='log'|'status'|'error')."""
 

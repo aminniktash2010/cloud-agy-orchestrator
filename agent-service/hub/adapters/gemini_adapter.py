@@ -103,6 +103,8 @@ class GeminiAdapter(ProviderAdapter):
         timeout_s: int,
         max_output_tokens: int,
         repo_ctx: Any = None,
+        conversation_id: str | None = None,  # noqa: ARG002 - answer_only: no sessions
+        continue_session: bool = True,  # noqa: ARG002
     ) -> tuple[AttemptOutcome, Any]:
         _, types = _require_genai()
         started = time.monotonic()
@@ -146,6 +148,8 @@ class GeminiAdapter(ProviderAdapter):
         timeout_s: int,
         max_output_tokens: int,
         repo_ctx: Any = None,
+        conversation_id: str | None = None,  # noqa: ARG002 - answer_only: no sessions
+        continue_session: bool = True,  # noqa: ARG002
     ) -> AsyncIterator[HubEvent]:
         _, types = _require_genai()
         started = time.monotonic()
