@@ -102,7 +102,12 @@ fi
 
 # 6. Auto-resume last active conversation session if one exists and not explicitly starting fresh
 CONVO_CLI_DIR="$SESSION_DIR/.gemini/antigravity-cli/conversations"
-if [ $HAS_CONTINUE -eq 0 ] && [ -d "$CONVO_CLI_DIR" ]; then
+if [ "$AGY_FORCE_NEW" = "1" ] || [ "$AGY_CONVERSATION_ID" = "new" ]; then
+    HAS_CONTINUE=1
+elif [ -n "$AGY_CONVERSATION_ID" ] && [ $HAS_CONTINUE -eq 0 ]; then
+    ARGS+=("--conversation" "$AGY_CONVERSATION_ID")
+    HAS_CONTINUE=1
+elif [ $HAS_CONTINUE -eq 0 ] && [ -d "$CONVO_CLI_DIR" ]; then
     if ls "$CONVO_CLI_DIR"/*.db >/dev/null 2>&1; then
         ARGS+=("-c")
     fi

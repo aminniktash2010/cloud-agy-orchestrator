@@ -17,13 +17,16 @@
       --card: #151c2c;
       --card-alt: #0f1523;
       --accent: #38bdf8;
+      --accent-hover: #0ea5e9;
       --text: #f1f5f9;
       --muted: #94a3b8;
       --border: #2e3a52;
+      --border-accent: rgba(56, 189, 248, 0.4);
       --success: #10b981;
       --error: #ef4444;
       --warning: #f59e0b;
     }
+    * { box-sizing: border-box; }
     body {
       font-family: system-ui, -apple-system, sans-serif;
       background: var(--bg);
@@ -32,15 +35,19 @@
       padding: 1.25rem;
       display: flex;
       justify-content: center;
+      min-height: 100vh;
     }
     .container {
       width: 100%;
-      max-width: 960px;
+      max-width: 1040px;
       background: var(--card);
       border-radius: 14px;
       padding: 1.5rem;
       box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      border: 1px solid var(--border);
     }
+
+    /* Common Header */
     .header-bar {
       display: flex;
       justify-content: space-between;
@@ -49,7 +56,7 @@
       gap: 0.75rem;
       margin-bottom: 0.5rem;
     }
-    h1 { margin: 0; font-size: 1.45rem; color: var(--accent); }
+    h1 { margin: 0; font-size: 1.45rem; color: var(--accent); display: flex; align-items: center; gap: 0.5rem; }
     .status-pill {
       font-size: 0.78rem;
       padding: 0.3rem 0.75rem;
@@ -62,40 +69,341 @@
       align-items: center;
       gap: 0.4rem;
     }
-    h2 { margin-top: 2rem; font-size: 1.15rem; color: var(--accent); border-top: 1px solid var(--border); padding-top: 1.25rem; }
-    label { display: block; margin-top: 1rem; font-size: 0.85rem; color: var(--muted); font-weight: 600; }
-    select, textarea, button {
-      width: 100%;
-      box-sizing: border-box;
-      margin-top: 0.35rem;
-      padding: 0.75rem;
-      border-radius: 8px;
-      border: 1px solid var(--border);
+    .hero-desc {
+      margin: 0.25rem 0 1.25rem 0;
+      font-size: 0.88rem;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    /* Projects Catalog View */
+    .catalog-meta-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      padding: 0.65rem 0.9rem;
       background: var(--card-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 1.25rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+    .catalog-meta-stats {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .catalog-meta-stats strong {
       color: var(--text);
-      font-size: 0.95rem;
     }
-    select:focus, textarea:focus, button:focus, a:focus {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
+
+    /* Project Cards Grid */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1rem;
     }
-    button {
-      margin-top: 1rem;
+    .proj-card {
+      background: var(--card-alt);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.1rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: border-color 0.2s, transform 0.15s ease;
+    }
+    .proj-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+    }
+    .proj-card h3 {
+      margin: 0 0 0.35rem 0;
+      font-size: 1.05rem;
+      color: var(--text);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .badge {
+      font-size: 0.7rem;
+      padding: 0.18rem 0.5rem;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent);
+      font-weight: 600;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+    }
+    .proj-meta {
+      font-size: 0.78rem;
+      color: var(--accent);
+      margin-bottom: 0.45rem;
+      font-weight: 500;
+    }
+    .proj-desc {
+      font-size: 0.82rem;
+      color: var(--muted);
+      line-height: 1.45;
+      margin-bottom: 1rem;
+      flex: 1;
+    }
+    .proj-actions {
+      display: flex;
+      gap: 0.45rem;
+    }
+    .proj-actions a, .proj-actions button {
+      margin: 0;
+      padding: 0.5rem 0.65rem;
+      font-size: 0.8rem;
+      text-align: center;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.3rem;
+    }
+    .btn-prompt {
+      flex: 1.4;
       background: var(--accent);
       color: #0b0f19;
-      font-weight: 700;
-      cursor: pointer;
       border: none;
-      transition: opacity 0.2s;
+      font-weight: 700 !important;
     }
-    button:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
+    .btn-prompt:hover {
+      background: var(--accent-hover);
+    }
+    .btn-preview {
+      flex: 1;
+      background: #1e293b;
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+    }
+    .btn-preview:hover {
+      background: #25334a;
+      border-color: var(--accent);
+    }
+    .btn-github {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.6rem !important;
+    }
+    .btn-github:hover {
+      color: var(--text);
+      border-color: var(--muted);
+    }
+
+    /* Terminal Dedicated View */
+    #terminal-view {
+      display: none;
+    }
+    #terminal-view.active {
+      display: block;
+    }
+    #projects-view.hidden {
+      display: none;
+    }
+
+    /* Navigation & Context Bar for Project */
+    .terminal-nav-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      padding-bottom: 0.9rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 1rem;
+    }
+    .terminal-nav-left {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .btn-back {
+      background: #1e293b;
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 0.45rem 0.85rem;
+      font-size: 0.82rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      width: auto;
+      margin: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      transition: all 0.15s ease;
+    }
+    .btn-back:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: #25334a;
+    }
+    .active-repo-badge {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--accent);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .terminal-nav-right {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .btn-mini {
+      background: #1e293b;
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 0.35rem 0.65rem;
+      font-size: 0.75rem;
+      border-radius: 5px;
+      text-decoration: none;
+      cursor: pointer;
+      font-weight: 600;
+      margin: 0;
+      width: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+    .btn-mini:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .autopilot-pill {
+      font-size: 0.72rem;
+      padding: 0.25rem 0.55rem;
+      border-radius: 4px;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    /* Top Session Switcher Bar */
+    .session-switcher-container {
+      background: #090e18;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .session-switcher-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.55rem;
+      font-size: 0.8rem;
+    }
+    .session-switcher-title {
+      font-weight: 700;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+    .session-pills-row {
+      display: flex;
+      gap: 0.5rem;
+      overflow-x: auto;
+      padding-bottom: 0.25rem;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    .session-pills-row::-webkit-scrollbar {
+      height: 4px;
+    }
+    .session-pills-row::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+    .session-pill {
+      background: #151d2e;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.4rem 0.75rem;
+      color: var(--muted);
+      cursor: pointer;
+      white-space: nowrap;
+      font-size: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+      transition: all 0.15s ease;
+      min-width: 140px;
+      flex-shrink: 0;
+    }
+    .session-pill:hover {
+      color: var(--text);
+      border-color: var(--accent);
+      background: #1b253b;
+    }
+    .session-pill.active {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: var(--accent);
+      color: #ffffff;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+    }
+    .session-pill-title {
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      color: var(--text);
+    }
+    .session-pill.active .session-pill-title {
+      color: var(--accent);
+    }
+    .session-pill-meta {
+      font-size: 0.68rem;
+      color: var(--muted);
+    }
+    .session-dot {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+    .session-pill.active .session-dot {
+      background: var(--accent);
+      box-shadow: 0 0 6px var(--accent);
+    }
+    .session-pill-new {
+      background: transparent;
+      border: 1px dashed var(--accent);
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 110px;
+      font-weight: 700;
+    }
+    .session-pill-new:hover {
+      background: rgba(56, 189, 248, 0.12);
+      color: #ffffff;
     }
 
     /* Terminal Console & xterm.js Host */
     .terminal-container {
-      margin-top: 1.25rem;
       border: 1px solid var(--border);
       border-radius: 10px;
       overflow: hidden;
@@ -258,7 +566,7 @@
 
     /* Result Banner */
     .result-card {
-      margin-top: 0.75rem;
+      margin: 0.75rem 0;
       padding: 0.85rem 1rem;
       background: rgba(56, 189, 248, 0.08);
       border: 1px solid rgba(56, 189, 248, 0.3);
@@ -288,73 +596,99 @@
       gap: 0.35rem;
     }
 
-    /* Project Cards Grid */
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-      gap: 0.85rem;
+    /* Prompt Execution Bar inside Terminal View */
+    .execution-box {
       margin-top: 1rem;
-    }
-    .proj-card {
       background: var(--card-alt);
       border: 1px solid var(--border);
       border-radius: 10px;
       padding: 1rem;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
     }
-    .proj-card h3 {
-      margin: 0 0 0.35rem 0;
-      font-size: 1rem;
-      color: var(--text);
+    .execution-options {
       display: flex;
       justify-content: space-between;
       align-items: center;
-    }
-    .badge {
-      font-size: 0.7rem;
-      padding: 0.15rem 0.45rem;
-      border-radius: 999px;
-      background: rgba(56, 189, 248, 0.15);
-      color: var(--accent);
-      font-weight: 600;
-    }
-    .proj-meta {
-      font-size: 0.78rem;
-      color: var(--accent);
-      margin-bottom: 0.4rem;
-    }
-    .proj-desc {
-      font-size: 0.82rem;
-      color: var(--muted);
-      line-height: 1.4;
-      margin-bottom: 0.85rem;
-    }
-    .proj-actions {
-      display: flex;
+      flex-wrap: wrap;
       gap: 0.5rem;
+      margin-bottom: 0.6rem;
     }
-    .proj-actions a, .proj-actions button {
-      flex: 1;
-      margin: 0;
-      padding: 0.5rem 0.6rem;
-      font-size: 0.78rem;
-      text-align: center;
-      text-decoration: none;
-      border-radius: 6px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .btn-preview {
-      background: var(--accent);
-      color: #0b0f19;
-      border: none;
-    }
-    .btn-github {
-      background: transparent;
+    .execution-model-select {
+      background: #151d2e;
       color: var(--text);
       border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.35rem 0.6rem;
+      font-size: 0.78rem;
+      width: auto;
+      margin: 0;
+    }
+    .prompt-textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #090e18;
+      color: var(--text);
+      font-size: 0.92rem;
+      font-family: inherit;
+      resize: vertical;
+      min-height: 72px;
+    }
+    .prompt-textarea:focus {
+      outline: 2px solid var(--accent);
+      border-color: var(--accent);
+    }
+    .execution-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      margin-top: 0.6rem;
+    }
+    .quick-chips {
+      display: flex;
+      gap: 0.35rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .chip {
+      background: #1e293b;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      padding: 0.2rem 0.55rem;
+      font-size: 0.72rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-family: ui-monospace, monospace;
+    }
+    .chip:hover {
+      color: var(--text);
+      border-color: var(--accent);
+    }
+    .btn-run {
+      background: var(--accent);
+      color: #0b0f19;
+      font-weight: 700;
+      padding: 0.65rem 1.25rem;
+      font-size: 0.9rem;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      width: auto;
+      margin: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: opacity 0.2s;
+    }
+    .btn-run:hover {
+      background: var(--accent-hover);
+    }
+    .btn-run:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
     }
 
     /* In-App Live Preview Modal */
@@ -362,7 +696,7 @@
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(7, 10, 18, 0.92);
+      background: rgba(7, 10, 18, 0.94);
       z-index: 9999;
       flex-direction: column;
     }
@@ -394,6 +728,7 @@
       border-radius: 6px;
       text-decoration: none;
       font-weight: 600;
+      cursor: pointer;
     }
     .modal-iframe {
       flex: 1;
@@ -405,96 +740,158 @@
 </head>
 <body>
   <div class="container">
-    <div class="header-bar">
-      <h1>🚀 Antigravity Cloud Hub</h1>
-      <span class="status-pill"><span class="term-pulse"></span> Cloud Run Connected (Zero-Auth)</span>
-    </div>
-    <p style="margin: 0.25rem 0 1rem 0; font-size: 0.88rem; color: var(--muted);">
-      Fully Automated AI App Factory • xterm.js PTY Terminal • Instant Previews • Google Play Console Staging
-    </p>
 
-    <label>Target Project for CLI Backend Chat (aminniktash2010)</label>
-    <select id="repo">
-      <option value="AMPtech-Hub">AMPtech-Hub (Android TV &amp; Play Console Launcher • SDK 36)</option>
-      <option value="Atari-TV">Atari-TV (Android TV Atari 2600 Emulator &amp; Shelf)</option>
-      <option value="River-Ride">River-Ride (Android &amp; Android TV Arcade)</option>
-      <option value="price-tracker">price-tracker (Android PriceGuard AI App)</option>
-      <option value="media-tracker">media-tracker (Web + Flutter + Vertex AI Gemini)</option>
-      <option value="Mamali-IPTV">Mamali-IPTV (Android TV &amp; Mobile IPTV v3.1)</option>
-      <option value="SpeakConfidentTV">SpeakConfidentTV (React Native Android TV)</option>
-      <option value="Home-Painting-Marketplace-">Home-Painting-Marketplace- (Web &amp; Mobile Marketplace)</option>
-      <option value="gcp-wif-foundation">gcp-wif-foundation (GCP Keyless WIF Foundation)</option>
-      <option value="cloud-agy-orchestrator" selected>cloud-agy-orchestrator (Cloud Run Agent Orchestrator)</option>
-    </select>
+    <!-- ========================================== -->
+    <!-- VIEW 1: PROJECTS PORTFOLIO CATALOG         -->
+    <!-- ========================================== -->
+    <div id="projects-view">
+      <div class="header-bar">
+        <h1>🚀 Antigravity Cloud Hub</h1>
+        <span class="status-pill"><span class="term-pulse"></span> Cloud Run Connected (Zero-Auth)</span>
+      </div>
+      <p class="hero-desc">
+        Zero-Local-Compute Portfolio Hub • Select any project below to open its dedicated interactive Antigravity CLI session with real-time PTY stream.
+      </p>
 
-    <label>Antigravity AI Model Engine</label>
-    <select id="model">
-      <option value="auto" selected>✨ Auto-Select (Available Quota &amp; Credit Failover)</option>
-      <option value="gemini-3.8-flash-high">Gemini 3.8 Flash (High Reasoning) • Fast &amp; Reliable [Active Quota]</option>
-      <option value="gemini-3.8-flash-medium">Gemini 3.8 Flash (Medium) • Ultra-Fast [Active Quota]</option>
-      <option value="gemini-3.8-flash-low">Gemini 3.8 Flash (Low) • Minimal Latency [Active Quota]</option>
-      <option value="gemini-4-argon-medium">Gemini 4 Argon (Medium) • Auto-Fallback if out of credit</option>
-      <option value="claude-sonnet-5-5-high">Claude Sonnet 5.5 (High) • Auto-Fallback if out of credit</option>
-    </select>
-    <div style="font-size:0.75rem; color:#10b981; margin-top:0.25rem;">
-      ⚡ Autopilot Active: Full tool permissions &amp; automatic quota failover enabled
-    </div>
-
-    <label>AI Architect &amp; CLI Backend Prompt</label>
-    <textarea id="prompt" rows="3" placeholder="Describe the UI, feature, or update to build in Cloud Run for the selected project..."></textarea>
-    <div style="font-size:0.75rem; color:var(--muted); margin-top:0.35rem; display:flex; justify-content:space-between; align-items:center;">
-      <label style="display:inline-flex; align-items:center; gap:0.35rem; cursor:pointer; color:#38bdf8; font-weight:500;">
-        <input type="checkbox" id="continue-session" checked style="accent-color:#38bdf8; cursor:pointer;">
-        🔄 Continue Active Project Session (Isolated Memory)
-      </label>
-      <span>Press <strong>Ctrl + Enter</strong> to execute</span>
-    </div>
-
-    <button id="btn-execute" onclick="sendTask()">⚡ Execute Automated Build in Cloud Run (Live PTY Stream)</button>
-
-    <!-- Terminal Console Window (xterm.js + PTY) -->
-    <div class="terminal-container">
-      <div class="terminal-header">
-        <div class="terminal-title">
-          <span id="term-pulse" class="term-pulse"></span>
-          <span id="term-status">Terminal Ready • xterm.js PTY</span>
-          <span class="terminal-mode-badge" id="term-badge">PTY ENGINE</span>
+      <div class="catalog-meta-bar">
+        <div class="catalog-meta-stats">
+          <span><strong>10</strong> Projects Hosted</span>
+          <span><strong>Autonomous PTY</strong> Cloud Run v2</span>
+          <span><strong>Autopilot</strong> Full Permissions</span>
+          <span><strong>5TB Drive</strong> Vault Active</span>
         </div>
-        <div class="terminal-controls">
-          <button class="term-btn" id="btn-autoscroll" onclick="toggleAutoScroll()" title="Toggle Auto-Scroll">Scroll: ON</button>
-          <button class="term-btn" onclick="fitTerminal()" title="Fit Terminal to Window">Fit ⛶</button>
-          <button class="term-btn" id="btn-copy" onclick="copyTerminalOutput()" title="Copy Terminal Output">📋 Copy</button>
-          <button class="term-btn" onclick="clearTerminal()" title="Clear Terminal Buffer">Clear</button>
-          <button class="term-btn" onclick="changeFontSize(-1)" title="Decrease Font Size">A-</button>
-          <button class="term-btn" onclick="changeFontSize(1)" title="Increase Font Size">A+</button>
+        <div>
+          <button class="btn-mini" onclick="syncDriveNow()">☁ Sync Catalog to Drive</button>
         </div>
       </div>
-      <div class="term-tabs-bar">
-        <button class="term-tab active" id="tab-build" onclick="switchTerminalTab('build')">⚡ Cloud Run Build Stream (PTY + SSE)</button>
-        <button class="term-tab" id="tab-shell" onclick="switchTerminalTab('shell')">💻 Interactive PTY Shell (WebSocket)</button>
-      </div>
-      <div class="interactive-bar" id="shell-bar">
-        <span id="shell-status">Direct bidirectional pseudo-terminal session inside Cloud Run container.</span>
-        <div class="interactive-actions">
-          <button class="interactive-btn" id="btn-shell-toggle" style="background:var(--accent);color:#0b0f19;border:none;" onclick="toggleShellSession()">⚡ Connect Shell</button>
+
+      <div id="projects-grid" class="grid"></div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- VIEW 2: DEDICATED PROJECT TERMINAL & SESSIONS -->
+    <!-- ========================================== -->
+    <div id="terminal-view">
+      <!-- Project Context & Navigation Header -->
+      <div class="terminal-nav-bar">
+        <div class="terminal-nav-left">
+          <button class="btn-back" onclick="closeProjectTerminal()">← All Projects</button>
+          <div class="active-repo-badge">
+            📁 <span id="active-repo-name">cloud-agy-orchestrator</span>
+          </div>
+          <span class="autopilot-pill">⚡ Autopilot (Full Permissions)</span>
+        </div>
+        <div class="terminal-nav-right">
+          <button class="btn-mini" onclick="openCurrentRepoPreview()">🌐 Live Preview</button>
+          <a class="btn-mini" id="active-repo-github" href="#" target="_blank">↗ GitHub</a>
         </div>
       </div>
-      <div id="terminal-container" class="terminal-xterm-host"></div>
-      <div id="terminal-fallback" class="terminal-body" style="display: none;">Select a project and enter a prompt above, then click Execute to watch the Antigravity CLI work in real time.</div>
-    </div>
 
-    <!-- Done Banner Card -->
-    <div id="result-card" class="result-card">
-      <div id="result-summary" style="font-weight: 600; margin-bottom: 0.35rem;">✓ Build Completed Successfully</div>
-      <div id="result-meta" style="color: var(--muted); font-size: 0.8rem;"></div>
-      <div class="result-card-actions">
-        <button id="btn-open-result-preview" class="btn-preview" onclick="openResultPreview()">🌐 Open Live Preview</button>
-        <a id="link-github-commit" class="btn-github" href="#" target="_blank">↗ View GitHub Commit</a>
+      <!-- Top Session Switcher Bar -->
+      <div class="session-switcher-container">
+        <div class="session-switcher-header">
+          <div class="session-switcher-title">
+            <span>💬 Project Antigravity Sessions</span>
+            <span id="session-count-badge" class="badge">0</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <span id="session-current-display" style="font-size:0.75rem; color:var(--muted);">Selected: Active Session</span>
+            <button class="term-btn" onclick="fetchProjectSessions(currentRepo)" title="Reload Sessions">🔄 Refresh</button>
+          </div>
+        </div>
+        <div class="session-pills-row" id="sessions-pills">
+          <div class="session-pill active" onclick="selectNewSession()">
+            <div class="session-pill-title"><span class="session-dot"></span> ＋ New Session</div>
+            <div class="session-pill-meta">Fresh Session Thread</div>
+          </div>
+        </div>
       </div>
+
+      <!-- Main Terminal Console Window (xterm.js + PTY) -->
+      <div class="terminal-container">
+        <div class="terminal-header">
+          <div class="terminal-title">
+            <span id="term-pulse" class="term-pulse"></span>
+            <span id="term-status">Terminal Ready • xterm.js PTY</span>
+            <span class="terminal-mode-badge" id="term-badge">PTY ENGINE</span>
+          </div>
+          <div class="terminal-controls">
+            <button class="term-btn" id="btn-autoscroll" onclick="toggleAutoScroll()" title="Toggle Auto-Scroll">Scroll: ON</button>
+            <button class="term-btn" onclick="fitTerminal()" title="Fit Terminal to Window">Fit ⛶</button>
+            <button class="term-btn" id="btn-copy" onclick="copyTerminalOutput()" title="Copy Terminal Output">📋 Copy</button>
+            <button class="term-btn" onclick="clearTerminal()" title="Clear Terminal Buffer">Clear</button>
+            <button class="term-btn" onclick="changeFontSize(-1)" title="Decrease Font Size">A-</button>
+            <button class="term-btn" onclick="changeFontSize(1)" title="Increase Font Size">A+</button>
+          </div>
+        </div>
+
+        <div class="term-tabs-bar">
+          <button class="term-tab active" id="tab-build" onclick="switchTerminalTab('build')">⚡ Cloud Run Build Stream (PTY + SSE)</button>
+          <button class="term-tab" id="tab-shell" onclick="switchTerminalTab('shell')">💻 Interactive PTY Shell (WebSocket)</button>
+        </div>
+
+        <div class="interactive-bar" id="shell-bar">
+          <span id="shell-status">Direct bidirectional pseudo-terminal locked to /workspace/<span id="shell-repo-label">...</span></span>
+          <div class="interactive-actions">
+            <button class="interactive-btn" id="btn-shell-toggle" style="background:var(--accent);color:#0b0f19;border:none;" onclick="toggleShellSession()">⚡ Connect Shell</button>
+          </div>
+        </div>
+
+        <div id="terminal-container" class="terminal-xterm-host"></div>
+        <div id="terminal-fallback" class="terminal-body" style="display: none;">Connecting to Antigravity CLI...</div>
+      </div>
+
+      <!-- Done Banner Card -->
+      <div id="result-card" class="result-card">
+        <div id="result-summary" style="font-weight: 600; margin-bottom: 0.35rem;">✓ Build Completed Successfully</div>
+        <div id="result-meta" style="color: var(--muted); font-size: 0.8rem;"></div>
+        <div class="result-card-actions">
+          <button id="btn-open-result-preview" class="btn-preview" onclick="openResultPreview()">🌐 Open Live Preview</button>
+          <a id="link-github-commit" class="btn-github" href="#" target="_blank">↗ View GitHub Commit</a>
+        </div>
+      </div>
+
+      <!-- Pinned Execution & Prompt Bar -->
+      <div class="execution-box">
+        <div class="execution-options">
+          <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+            <label style="font-size:0.75rem; color:var(--muted); font-weight:600;">Model Engine:</label>
+            <select id="model-select" class="execution-model-select">
+              <option value="auto" selected>✨ Auto-Select (Available Quota Failover)</option>
+              <option value="gemini-3.8-flash-high">Gemini 3.8 Flash (High Reasoning) • Fast &amp; Reliable</option>
+              <option value="gemini-3.8-flash-medium">Gemini 3.8 Flash (Medium) • Ultra-Fast</option>
+              <option value="gemini-3.8-flash-low">Gemini 3.8 Flash (Low) • Minimal Latency</option>
+              <option value="gemini-4-argon-medium">Gemini 4 Argon (Medium) • Fallback</option>
+              <option value="claude-sonnet-5-5-high">Claude Sonnet 5.5 (High) • Fallback</option>
+            </select>
+          </div>
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <label style="display:inline-flex; align-items:center; gap:0.35rem; cursor:pointer; color:var(--accent); font-size:0.78rem; font-weight:500;">
+              <input type="checkbox" id="continue-session-chk" checked style="accent-color:var(--accent); cursor:pointer;">
+              🔄 Resume Isolated Session Memory
+            </label>
+          </div>
+        </div>
+
+        <textarea id="terminal-prompt" class="prompt-textarea" rows="2" placeholder="Ask Antigravity CLI to build, fix, or update in this project..."></textarea>
+
+        <div class="execution-footer">
+          <div class="quick-chips">
+            <span style="font-size:0.72rem; color:var(--muted);">Quick:</span>
+            <button class="chip" onclick="insertQuickPrompt('git status && git diff --stat')">git status</button>
+            <button class="chip" onclick="insertQuickPrompt('Inspect current project status and run test suite.')">Test Suite</button>
+            <button class="chip" onclick="insertQuickPrompt('Verify Google Play Console staging build and version codes.')">Play Staging</button>
+            <button class="chip" onclick="insertQuickPrompt('Optimize UI layout and add responsive styling.')">Polish UI</button>
+          </div>
+          <div style="display:flex; align-items:center; gap:0.75rem;">
+            <span style="font-size:0.75rem; color:var(--muted);">Ctrl + Enter</span>
+            <button id="btn-run-task" class="btn-run" onclick="sendTask()">⚡ Run in Session</button>
+          </div>
+        </div>
+      </div>
+
     </div>
 
-    <h2>📱 All 10 Antigravity Projects Portfolio (Each Opens Its Own Live Preview)</h2>
-    <div id="projects-grid" class="grid"></div>
   </div>
 
   <!-- In-App Interactive Preview Modal -->
@@ -512,6 +909,10 @@
   <script>
     const CLOUD_RUN_BASE = 'https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app';
     const STREAM_URL = `${CLOUD_RUN_BASE}/chat/stream`;
+
+    let currentRepo = 'cloud-agy-orchestrator';
+    let currentSessionId = null; // null means auto last-active, or specific uuid, or "new"
+    let currentSessionsList = [];
 
     let autoScroll = true;
     let lastDoneData = null;
@@ -536,6 +937,200 @@
       { repo: 'cloud-agy-orchestrator', stack: 'Cloud Run + Android Hub', vis: 'Play Console', desc: 'Zero-Local-Compute Antigravity Cloud Orchestrator & Universal Preview Engine.' }
     ];
 
+    function renderCatalogGrid() {
+      const grid = document.getElementById('projects-grid');
+      grid.innerHTML = PROJECTS.map(p => `
+        <div class="proj-card">
+          <div>
+            <h3>${p.repo} <span class="badge">${p.vis}</span></h3>
+            <div class="proj-meta">${p.stack}</div>
+            <div class="proj-desc">${p.desc}</div>
+          </div>
+          <div class="proj-actions">
+            <button class="btn-prompt" onclick="openProjectTerminal('${p.repo}')">⚡ Prompt / CLI</button>
+            <button class="btn-preview" onclick="openPreview('${p.repo}')">🌐 Preview</button>
+            <a class="btn-github" href="https://github.com/aminniktash2010/${p.repo}" target="_blank" title="View Source on GitHub">↗ GitHub</a>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // View Navigation
+    function openProjectTerminal(repo) {
+      currentRepo = repo;
+      currentSessionId = null; // Auto pick last active session
+
+      document.getElementById('active-repo-name').textContent = repo;
+      document.getElementById('shell-repo-label').textContent = repo;
+      document.getElementById('active-repo-github').href = `https://github.com/aminniktash2010/${repo}`;
+
+      document.getElementById('projects-view').classList.add('hidden');
+      document.getElementById('terminal-view').classList.add('active');
+
+      window.location.hash = `#project/${repo}`;
+
+      // Initialize xterm if not ready
+      if (!term) {
+        initTerminal();
+      } else {
+        setTimeout(fitTerminal, 50);
+      }
+
+      // Load Sessions for this project
+      fetchProjectSessions(repo);
+
+      // Focus prompt
+      const promptInput = document.getElementById('terminal-prompt');
+      promptInput.placeholder = `Describe task, UI update, or command for ${repo}...`;
+      promptInput.focus();
+
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function closeProjectTerminal() {
+      if (wsSession) {
+        try { wsSession.close(); } catch(e){}
+        wsSession = null;
+      }
+      document.getElementById('terminal-view').classList.remove('active');
+      document.getElementById('projects-view').classList.remove('hidden');
+      window.location.hash = '';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function openCurrentRepoPreview() {
+      if (currentRepo) openPreview(currentRepo);
+    }
+
+    // Sessions Fetcher & Switcher
+    async function fetchProjectSessions(repo) {
+      const pillsContainer = document.getElementById('sessions-pills');
+      const countBadge = document.getElementById('session-count-badge');
+      const currentDisplay = document.getElementById('session-current-display');
+
+      pillsContainer.innerHTML = '<span style="font-size:0.75rem; color:var(--muted); padding:0.4rem;">Loading sessions...</span>';
+
+      try {
+        const res = await fetch(`${CLOUD_RUN_BASE}/sessions/${encodeURIComponent(repo)}`, {
+          headers: { 'x-webhook-token': 'agy-public-client' }
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        currentSessionsList = data.sessions || [];
+
+        countBadge.textContent = currentSessionsList.length;
+
+        // Render session pills
+        let html = '';
+
+        // "+ New Session" pill
+        const isNewActive = currentSessionId === 'new';
+        html += `
+          <div class="session-pill session-pill-new ${isNewActive ? 'active' : ''}" onclick="selectNewSession()" title="Start a fresh, clean conversation thread">
+            <span class="session-dot"></span> ＋ New Session
+          </div>
+        `;
+
+        if (currentSessionsList.length === 0) {
+          currentSessionId = 'new';
+          currentDisplay.textContent = 'Selected: New Clean Session';
+        } else {
+          // Find if we should select the last active or keep current selection
+          let foundCurrent = false;
+          currentSessionsList.forEach((s, idx) => {
+            const isSelected = (currentSessionId === s.conversation_id) || (!currentSessionId && s.is_last_active) || (!currentSessionId && idx === 0);
+            if (isSelected) {
+              foundCurrent = true;
+              currentSessionId = s.conversation_id;
+              currentDisplay.textContent = `Selected: ${s.title.slice(0, 24)}`;
+            }
+
+            const activeClass = isSelected ? 'active' : '';
+            const titleDisplay = s.title && s.title !== 'Active Development Session' 
+              ? s.title.slice(0, 28) 
+              : `Session ${s.conversation_id.slice(0, 8)}`;
+            const metaDisplay = s.last_modified_time 
+              ? `${s.last_modified_time}${s.step_count ? ' • ' + s.step_count + ' steps' : ''}` 
+              : `${s.step_count ? s.step_count + ' steps' : 'Active Thread'}`;
+
+            html += `
+              <div class="session-pill ${activeClass}" onclick="selectSession('${s.conversation_id}')" title="Resume conversation ${s.conversation_id}">
+                <div class="session-pill-title">
+                  <span class="session-dot"></span>
+                  <span>${titleDisplay}</span>
+                </div>
+                <div class="session-pill-meta">${metaDisplay}</div>
+              </div>
+            `;
+          });
+
+          if (!foundCurrent && currentSessionId !== 'new') {
+            currentSessionId = currentSessionsList[0].conversation_id;
+            currentDisplay.textContent = `Selected: ${currentSessionsList[0].title.slice(0, 24)}`;
+          }
+        }
+
+        pillsContainer.innerHTML = html;
+
+        if (term) {
+          term.writeln(`\x1b[90m[SESSION] Active context set to: ${currentSessionId || 'Last Active'}\x1b[0m`);
+        }
+
+      } catch (err) {
+        console.warn('Could not fetch project sessions:', err);
+        pillsContainer.innerHTML = `
+          <div class="session-pill active" onclick="selectNewSession()">
+            <div class="session-pill-title"><span class="session-dot"></span> ＋ New Session (Default)</div>
+            <div class="session-pill-meta">Isolated workspace ready</div>
+          </div>
+        `;
+        currentSessionId = 'new';
+        countBadge.textContent = '0';
+        currentDisplay.textContent = 'Selected: Default Session';
+      }
+    }
+
+    function selectSession(sessionId) {
+      currentSessionId = sessionId;
+      const currentDisplay = document.getElementById('session-current-display');
+      const found = currentSessionsList.find(s => s.conversation_id === sessionId);
+      currentDisplay.textContent = found ? `Selected: ${found.title.slice(0, 24)}` : `Selected: ${sessionId.slice(0, 8)}`;
+
+      // Update pills active styling
+      document.querySelectorAll('.session-pill').forEach(pill => pill.classList.remove('active'));
+      const clicked = Array.from(document.querySelectorAll('.session-pill')).find(p => p.getAttribute('onclick')?.includes(sessionId));
+      if (clicked) clicked.classList.add('active');
+
+      if (term) {
+        term.writeln(`\r\n\x1b[1;36m🔄 Switched to Session: ${sessionId}\x1b[0m`);
+      }
+
+      // If interactive websocket shell is connected, notify user
+      if (wsSession && wsSession.readyState === WebSocket.OPEN) {
+        term.writeln('\x1b[33mNote: PTY Shell connected. Run `agy -c` to attach to this session directly.\x1b[0m');
+      }
+    }
+
+    function selectNewSession() {
+      currentSessionId = 'new';
+      document.getElementById('session-current-display').textContent = 'Selected: ＋ New Session';
+      document.querySelectorAll('.session-pill').forEach(pill => pill.classList.remove('active'));
+      const newPill = document.querySelector('.session-pill-new');
+      if (newPill) newPill.classList.add('active');
+
+      if (term) {
+        term.writeln('\r\n\x1b[1;32m✨ New Session mode selected (Fresh conversation thread)\x1b[0m');
+      }
+    }
+
+    function insertQuickPrompt(text) {
+      const textarea = document.getElementById('terminal-prompt');
+      textarea.value = text;
+      textarea.focus();
+    }
+
+    // Terminal Initialization
     function initTerminal() {
       const container = document.getElementById('terminal-container');
       const fallback = document.getElementById('terminal-fallback');
@@ -602,7 +1197,7 @@
           writeWelcomeBanner();
           return;
         } catch (e) {
-          console.warn('xterm.js initialization error, falling back to standard view:', e);
+          console.warn('xterm.js initialization error, falling back:', e);
         }
       }
 
@@ -614,10 +1209,10 @@
     function writeWelcomeBanner() {
       if (!isXtermReady || !term) return;
       term.writeln('\x1b[1;36m==================================================================\x1b[0m');
-      term.writeln('\x1b[1;36m  🚀 ANTIGRAVITY CLOUD COMMAND CENTER • xterm.js PTY Terminal\x1b[0m');
+      term.writeln(`\x1b[1;36m  🚀 ANTIGRAVITY CLOUD COMMAND CENTER • [${currentRepo}]\x1b[0m`);
       term.writeln('\x1b[90m  Cloud Run v2 (us-central1) • Zero-Local-Compute • PTY ANSI Stream\x1b[0m');
       term.writeln('\x1b[1;36m==================================================================\x1b[0m');
-      term.writeln('\x1b[32m✔ Terminal initialized and ready.\x1b[0m Select a project and execute a prompt,');
+      term.writeln('\x1b[32m✔ Connected to project environment.\x1b[0m Select a session above or run a prompt below,');
       term.writeln('\x1b[90mor switch to the Interactive PTY Shell tab for direct bash access.\x1b[0m\r\n');
     }
 
@@ -705,7 +1300,7 @@
     function toggleShellSession() {
       const btn = document.getElementById('btn-shell-toggle');
       const status = document.getElementById('shell-status');
-      const repo = document.getElementById('repo').value;
+      const repo = currentRepo;
 
       if (wsSession && (wsSession.readyState === WebSocket.OPEN || wsSession.readyState === WebSocket.CONNECTING)) {
         wsSession.close();
@@ -719,7 +1314,8 @@
 
       const wsProto = CLOUD_RUN_BASE.startsWith('https') ? 'wss:' : 'ws:';
       const wsHost = CLOUD_RUN_BASE.replace(/^https?:\/\//, '');
-      const wsUrl = `${wsProto}//${wsHost}/terminal/ws?repo=${encodeURIComponent(repo)}&token=agy-public-client`;
+      const sessParam = currentSessionId ? `&conversation_id=${encodeURIComponent(currentSessionId)}` : '';
+      const wsUrl = `${wsProto}//${wsHost}/terminal/ws?repo=${encodeURIComponent(repo)}&token=agy-public-client${sessParam}`;
 
       btn.textContent = 'Connecting...';
       btn.disabled = true;
@@ -787,6 +1383,8 @@
     function openResultPreview() {
       if (lastDoneData && lastDoneData.repo) {
         openPreview(lastDoneData.repo);
+      } else if (currentRepo) {
+        openPreview(currentRepo);
       }
     }
 
@@ -795,63 +1393,28 @@
       document.getElementById('modal-iframe').src = 'about:blank';
     }
 
-    function selectRepo(repoName) {
-      document.getElementById('repo').value = repoName;
-      document.getElementById('prompt').focus();
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-
-    function renderGrid() {
-      const grid = document.getElementById('projects-grid');
-      grid.innerHTML = PROJECTS.map(p => `
-        <div class="proj-card">
-          <div>
-            <h3>${p.repo} <span class="badge">${p.vis}</span></h3>
-            <div class="proj-meta">${p.stack}</div>
-            <div class="proj-desc">${p.desc}</div>
-          </div>
-          <div class="proj-actions">
-            <button class="btn-preview" onclick="openPreview('${p.repo}')">🌐 Preview</button>
-            <a class="btn-github" href="https://github.com/aminniktash2010/${p.repo}" target="_blank">GitHub</a>
-            <button style="background:#1e293b;color:#38bdf8;border:1px solid #38bdf8;" onclick="selectRepo('${p.repo}')">Prompt</button>
-          </div>
-        </div>
-      `).join('');
-    }
-    renderGrid();
-
-    // Auto-load previously selected project and autofocus prompt
-    const savedRepo = localStorage.getItem('agy_selected_repo');
-    if (savedRepo && document.getElementById('repo').querySelector(`option[value="${savedRepo}"]`)) {
-      document.getElementById('repo').value = savedRepo;
-    }
-    document.getElementById('repo').addEventListener('change', (e) => {
-      localStorage.setItem('agy_selected_repo', e.target.value);
-    });
-
-    const savedModel = localStorage.getItem('agy_selected_model');
-    if (savedModel && document.querySelector(`#model option[value="${savedModel}"]`)) {
-      document.getElementById('model').value = savedModel;
-    }
-    document.getElementById('model').addEventListener('change', (e) => {
-      localStorage.setItem('agy_selected_model', e.target.value);
-    });
-    document.getElementById('prompt').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        sendTask();
+    async function syncDriveNow() {
+      try {
+        const res = await fetch(`${CLOUD_RUN_BASE}/sync-drive`, {
+          method: 'POST',
+          headers: { 'x-webhook-token': 'agy-public-client' }
+        });
+        const d = await res.json();
+        alert(`✓ Google Drive Synced: ${d.projects_synced || 10} projects staged to vault.`);
+      } catch (e) {
+        alert(`Drive sync request sent: ${e.message}`);
       }
-    });
-    document.getElementById('prompt').focus();
+    }
 
     async function sendTask() {
-      const repo = document.getElementById('repo').value;
-      const model = document.getElementById('model').value;
-      const prompt = document.getElementById('prompt').value.trim();
-      const continueSession = document.getElementById('continue-session') ? document.getElementById('continue-session').checked : true;
+      const repo = currentRepo;
+      const model = document.getElementById('model-select').value;
+      const prompt = document.getElementById('terminal-prompt').value.trim();
+      const continueSession = document.getElementById('continue-session-chk').checked;
+
       const termStatus = document.getElementById('term-status');
       const termPulse = document.getElementById('term-pulse');
-      const btnExec = document.getElementById('btn-execute');
+      const btnExec = document.getElementById('btn-run-task');
       const resCard = document.getElementById('result-card');
       const fallback = document.getElementById('terminal-fallback');
 
@@ -864,14 +1427,17 @@
       switchTerminalTab('build');
 
       btnExec.disabled = true;
-      btnExec.textContent = '⏳ Streaming Antigravity CLI Execution in Cloud Run...';
+      btnExec.textContent = '⏳ Streaming Execution...';
       termPulse.className = 'term-pulse pulse-running';
-      termStatus.textContent = `Connecting to ${repo} [${model}]...`;
+      termStatus.textContent = `Running on ${repo} [${model}]...`;
       resCard.classList.remove('active');
       lastDoneData = null;
 
       if (isXtermReady && term) {
         term.writeln(`\r\n\x1b[1;36m▶ Dispatching Task to Cloud Run [${repo}]...\x1b[0m`);
+        if (currentSessionId && currentSessionId !== 'new') {
+          term.writeln(`\x1b[90m  Attached Session: ${currentSessionId}\x1b[0m`);
+        }
       } else {
         fallback.textContent = `Connecting to Cloud Run for ${repo}...\n`;
       }
@@ -905,7 +1471,14 @@
             'Content-Type': 'application/json',
             'x-webhook-token': 'agy-public-client'
           },
-          body: JSON.stringify({ repo, prompt, model, branch: 'main', continue_session: continueSession })
+          body: JSON.stringify({
+            repo,
+            prompt,
+            model,
+            branch: 'main',
+            continue_session: continueSession,
+            conversation_id: currentSessionId
+          })
         });
 
         if (!response.ok) {
@@ -942,6 +1515,8 @@
                 lastDoneData = payload.data;
                 appendLine('✔ [BUILD COMPLETED] Artifacts committed and pushed to GitHub.', '\x1b[1;32m');
                 showDoneBanner(payload.data);
+                // Refresh sessions
+                fetchProjectSessions(repo);
               } else if (payload.type === 'error') {
                 termPulse.className = 'term-pulse pulse-error';
                 termStatus.textContent = '✕ Error Encountered';
@@ -958,7 +1533,7 @@
         appendLine(`[STREAM ERROR] ${err.message}`, '\x1b[1;31m');
       } finally {
         btnExec.disabled = false;
-        btnExec.textContent = '⚡ Execute Automated Build in Cloud Run (Live PTY Stream)';
+        btnExec.textContent = '⚡ Run in Session';
       }
     }
 
@@ -988,8 +1563,26 @@
       resCard.classList.add('active');
     }
 
-    // Initialize xterm.js when DOM is ready
-    window.addEventListener('DOMContentLoaded', initTerminal);
+    // Keyboard shortcut for prompt
+    document.addEventListener('DOMContentLoaded', () => {
+      renderCatalogGrid();
+
+      const promptInput = document.getElementById('terminal-prompt');
+      promptInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          sendTask();
+        }
+      });
+
+      // Handle direct hash navigation e.g. #project/Mamali-IPTV
+      if (window.location.hash.startsWith('#project/')) {
+        const repoName = decodeURIComponent(window.location.hash.replace('#project/', ''));
+        if (PROJECTS.some(p => p.repo === repoName)) {
+          openProjectTerminal(repoName);
+        }
+      }
+    });
   </script>
 </body>
 </html>

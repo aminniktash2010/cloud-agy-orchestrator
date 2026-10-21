@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import io
 import zipfile
+import sqlite3
 from collections import defaultdict
 from pathlib import Path
 import pty
@@ -428,6 +429,92 @@ async def list_projects():
     return {"owner": GITHUB_OWNER, "count": len(enriched), "projects": enriched}
 
 
+@app.get("/sessions/{repo}")
+async def get_project_sessions(repo: str):
+    """Returns all relevant Antigravity sessions for a specific project with isolation."""
+    repo_clean = repo.strip()
+    sessions = []
+    seen_ids = set()
+
+    possible_dbs = [
+        HOT_WORKSPACE_ROOT / repo_clean / ".agy_session" / ".gemini" / "antigravity-cli" / "conversation_summaries.db",
+        HOT_WORKSPACE_ROOT / repo_clean / ".agy_session" / ".gemini" / "antigravity" / "conversation_summaries.db",
+        Path(f"/workspace/{repo_clean}/.agy_session/.gemini/antigravity-cli/conversation_summaries.db"),
+        Path(f"/home/amin/cloud-agy-orchestrator/project-sessions/{repo_clean}/.agy_session/.gemini/antigravity-cli/conversation_summaries.db"),
+        Path("/root/.gemini/antigravity/conversation_summaries.db"),
+        Path("/root/.gemini/antigravity-cli/conversation_summaries.db"),
+    ]
+
+    for db_path in possible_dbs:
+        if db_path.exists():
+            try:
+                con = sqlite3.connect(db_path)
+                cur = con.cursor()
+                cur.execute("PRAGMA table_info(conversation_summaries);")
+                cols = [r[1] for r in cur.fetchall()]
+                if "conversation_id" not in cols:
+                    con.close()
+                    continue
+
+                select_cols = ["conversation_id", "title", "last_modified_time"]
+                if "step_count" in cols:
+                    select_cols.append("step_count")
+                if "workspace_uris" in cols:
+                    select_cols.append("workspace_uris")
+
+                rows = cur.execute(f"SELECT {', '.join(select_cols)} FROM conversation_summaries ORDER BY last_modified_time DESC;").fetchall()
+                con.close()
+
+                for r in rows:
+                    cid = r[0]
+                    if cid in seen_ids:
+                        continue
+                    title = r[1] or "Active Development Session"
+                    last_mod = r[2] or ""
+                    step_count = r[3] if len(r) > 3 and isinstance(r[3], int) else 0
+                    ws = r[4] if len(r) > 4 and isinstance(r[4], str) else ""
+
+                    # Filter by workspace if reading from a global DB
+                    if ws and repo_clean.lower() not in ws.lower() and ('-1' not in ws or repo_clean not in ws):
+                        continue
+
+                    seen_ids.add(cid)
+                    sessions.append({
+                        "conversation_id": cid,
+                        "title": title,
+                        "last_modified_time": last_mod,
+                        "step_count": step_count,
+                        "is_last_active": len(sessions) == 0,
+                    })
+            except Exception:
+                pass
+
+        if sessions:
+            break
+
+    # If no sessions in SQLite summaries, scan conversation DB files directly
+    convo_dirs = [
+        HOT_WORKSPACE_ROOT / repo_clean / ".agy_session" / ".gemini" / "antigravity-cli" / "conversations",
+        Path(f"/workspace/{repo_clean}/.agy_session/.gemini/antigravity-cli/conversations"),
+        Path(f"/home/amin/cloud-agy-orchestrator/project-sessions/{repo_clean}/.agy_session/.gemini/antigravity-cli/conversations"),
+    ]
+    for cdir in convo_dirs:
+        if cdir.exists():
+            for db_file in sorted(cdir.glob("*.db"), key=lambda f: f.stat().st_mtime, reverse=True):
+                cid = db_file.stem
+                if cid not in seen_ids:
+                    seen_ids.add(cid)
+                    sessions.append({
+                        "conversation_id": cid,
+                        "title": f"Session {cid[:8]}",
+                        "last_modified_time": datetime.datetime.fromtimestamp(db_file.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+                        "step_count": 0,
+                        "is_last_active": len(sessions) == 0,
+                    })
+
+    return {"repo": repo_clean, "count": len(sessions), "sessions": sessions}
+
+
 @app.post("/sync-drive")
 async def sync_drive_catalog(x_webhook_token: str = Header(None)):
     """Syncs the full 10-project Antigravity portfolio to Google Drive (_AGY_Cloud_Vault/latest_build_status.md)."""
@@ -808,7 +895,7 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
 
 
 @app.websocket("/terminal/ws")
-async def websocket_terminal(websocket: WebSocket, repo: str = "cloud-agy-orchestrator", token: str = None):
+async def websocket_terminal(websocket: WebSocket, repo: str = "cloud-agy-orchestrator", token: str = None, conversation_id: str = None):
     """Direct interactive WebSocket terminal hooked to an authentic Cloud Run PTY session."""
     if WEBHOOK_SECRET and token and token not in (WEBHOOK_SECRET, "agy-public-client"):
         await websocket.close(code=1008)
@@ -825,6 +912,10 @@ async def websocket_terminal(websocket: WebSocket, repo: str = "cloud-agy-orches
             repo_dir = HOT_WORKSPACE_ROOT if HOT_WORKSPACE_ROOT.exists() else Path.cwd()
 
         env = build_isolated_env(repo_dir) if repo_dir.exists() else os.environ.copy()
+        if conversation_id:
+            env["AGY_CONVERSATION_ID"] = conversation_id
+            if conversation_id == "new":
+                env["AGY_FORCE_NEW"] = "1"
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["FORCE_COLOR"] = "1"
