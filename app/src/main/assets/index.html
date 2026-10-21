@@ -437,6 +437,10 @@
 
     <label>AI Architect &amp; CLI Backend Prompt</label>
     <textarea id="prompt" rows="3" placeholder="Describe the UI, feature, or update to build in Cloud Run for the selected project..."></textarea>
+    <div style="font-size:0.75rem; color:var(--muted); margin-top:0.35rem; display:flex; justify-content:space-between;">
+      <span>💡 CLI auto-loads in active project path</span>
+      <span>Press <strong>Ctrl + Enter</strong> to execute</span>
+    </div>
 
     <button id="btn-execute" onclick="sendTask()">⚡ Execute Automated Build in Cloud Run (Live PTY Stream)</button>
 
@@ -807,6 +811,22 @@
       `).join('');
     }
     renderGrid();
+
+    // Auto-load previously selected project and autofocus prompt
+    const savedRepo = localStorage.getItem('agy_selected_repo');
+    if (savedRepo && document.getElementById('repo').querySelector(`option[value="${savedRepo}"]`)) {
+      document.getElementById('repo').value = savedRepo;
+    }
+    document.getElementById('repo').addEventListener('change', (e) => {
+      localStorage.setItem('agy_selected_repo', e.target.value);
+    });
+    document.getElementById('prompt').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        sendTask();
+      }
+    });
+    document.getElementById('prompt').focus();
 
     async function sendTask() {
       const repo = document.getElementById('repo').value;

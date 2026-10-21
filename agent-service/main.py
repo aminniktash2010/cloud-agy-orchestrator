@@ -164,6 +164,23 @@ def build_isolated_env(repo_dir: Path) -> dict[str, str]:
     if target_token.exists() and not (root_cli_dir / "antigravity-oauth-token").exists():
         shutil.copy2(target_token, root_cli_dir / "antigravity-oauth-token")
 
+    # Pre-accept onboarding and Terms of Service in isolated session so agy never blocks
+    session_gemini = session_home / ".gemini" / "antigravity"
+    session_gemini.mkdir(parents=True, exist_ok=True)
+    state_file = session_gemini / "antigravity_state.pbtxt"
+    if not state_file.exists():
+        state_file.write_text(
+            'post_onboarding: {\n  completed_steps: POST_ONBOARDING_STEP_TYPE_MANAGER_WELCOME\n  completed_steps: POST_ONBOARDING_STEP_TYPE_USAGE_MODE\n  completed_steps: POST_ONBOARDING_STEP_TYPE_AGENT_CONFIGURATION\n  completed_steps: POST_ONBOARDING_STEP_TYPE_ADD_WORKSPACE\n}\nseen_nuxs: {\n  uids: 24\n  uids: 58\n}\nagent_onboarding_completed: AGENT_ONBOARDING_STATE_COMPLETED\ninstallation_uuid: "011f849c-f100-4b95-8941-4e7a2b604dd8"',
+            encoding="utf-8"
+        )
+
+    jetski_file = cli_gemini_dir / "jetski_state.pbtxt"
+    if not jetski_file.exists():
+        jetski_file.write_text(
+            'post_onboarding: {\n  completed_steps: POST_ONBOARDING_STEP_TYPE_MANAGER_WELCOME\n  completed_steps: POST_ONBOARDING_STEP_TYPE_USAGE_MODE\n  completed_steps: POST_ONBOARDING_STEP_TYPE_AGENT_CONFIGURATION\n  completed_steps: POST_ONBOARDING_STEP_TYPE_ADD_WORKSPACE\n}\ninstallation_uuid: "164c21cf-20c9-4451-8c37-de0ae61960f9"',
+            encoding="utf-8"
+        )
+
     env = os.environ.copy()
     env["HOME"] = str(session_home)
     env["XDG_CONFIG_HOME"] = str(session_home / ".config")
