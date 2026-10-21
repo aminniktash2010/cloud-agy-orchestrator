@@ -113,6 +113,25 @@ probe run, families come from the config seed with `remaining_pct: null` and
 to any family (`{name, remaining_pct, reset_in}`) — visible, never silently
 dropped ("check all its models", carried through honestly).
 
+### OpenRouter tier (Epic A)
+
+The tier-level block comes from the key poll (`GET {quota.providers.openrouter.key_url}`,
+default `https://openrouter.ai/api/v1/key`, `Authorization: Bearer $OPENROUTER_API_KEY`,
+10-min cadence). `remaining_pct` follows AD-19 exactly:
+
+1. Key has numeric `limit` + `limit_remaining` (spend cap) → `100 * limit_remaining / limit`;
+   `reset_in` from `limit_reset`.
+2. Else the API's own `free_model_daily_requests` counter → `100 * remaining / limit`
+   (verified live 2026-10-21: `{used: 0, limit: 50, remaining: 50}` on the stored
+   key — `free_rpd_cap` is 50); `reset_in` counts to UTC midnight ("resets daily").
+3. Else free tier without the counter → local estimate `100 * (1 - requests_today / free_rpd_cap)`.
+4. Else `remaining_pct: null` + an honest detail — never a guessed number.
+
+On 429/402 the poll backs off exponentially (cap 1h) so the check never burns
+the budget it measures; other failures keep the last-known value and mark
+`poller.providers.openrouter.healthy: false` (AD-17 downgrades the display to
+`estimated`).
+
 ## Secret-freedom (AC-10)
 
 The payload carries percentages, timestamps, booleans, model names and bucket

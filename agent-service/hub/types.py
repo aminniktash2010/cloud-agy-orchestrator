@@ -85,6 +85,11 @@ class QuotaProviderSettings(BaseModel):
     pb_field_roles: Optional[dict[str, int]] = None
     families: dict[str, dict] = Field(default_factory=dict)
     family_markers: dict[str, list[str]] = Field(default_factory=dict)
+    # Epic A: OpenRouter key poll knobs (FR-6.1). key_url None -> the
+    # canonical endpoint; free_rpd_cap verified 50 vs 1000 at build time
+    # (2026-10-21: live key reports free_model_daily_requests.limit = 50).
+    key_url: Optional[str] = None
+    free_rpd_cap: int = 50
 
 
 class QuotaSettings(BaseModel):

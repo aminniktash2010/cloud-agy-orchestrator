@@ -181,6 +181,14 @@ DEFAULT_LADDER: dict = {
                     "argon": ["argon"],
                 },
             },
+            # Epic A: OpenRouter live key poll. free_rpd_cap verified
+            # 2026-10-21 against the stored key: the /api/v1/key response
+            # carries free_model_daily_requests.limit = 50 (not 1000).
+            "openrouter": {
+                "quota_enabled": True,
+                "key_url": "https://openrouter.ai/api/v1/key",
+                "free_rpd_cap": 50,
+            },
         },
     },
 }
