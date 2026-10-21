@@ -570,7 +570,9 @@ async def sync_token(req: TokenSyncRequest, x_webhook_token: str = Header(None))
 async def hub_status(x_webhook_token: str = Header(None)):
     """Model Hub ladder status: tier order, key/config state, circuit breakers,
     quota usage. Never contains secrets (AC-10)."""
-    if WEBHOOK_SECRET and x_webhook_token not in (WEBHOOK_SECRET, "agy-public-client"):
+    # Public readability (same convention as /chat): the payload never contains
+    # secrets (AC-10), only key-configured booleans and circuit/quota state.
+    if x_webhook_token and WEBHOOK_SECRET and x_webhook_token not in (WEBHOOK_SECRET, "agy-public-client"):
         raise HTTPException(status_code=401, detail="Unauthorized webhook token")
     return model_hub.status()
 
