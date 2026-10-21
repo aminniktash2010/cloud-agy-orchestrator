@@ -37,7 +37,7 @@ RUN mkdir -p /workspace/cloud-agy-orchestrator/.agy_session \
 RUN printf 'if [ -n "$AGY_TARGET_REPO" ]; then mkdir -p "/workspace/$AGY_TARGET_REPO" 2>/dev/null; cd "/workspace/$AGY_TARGET_REPO" 2>/dev/null || true; elif [ "$PWD" = "/" ] || [ "$PWD" = "/root" ] || [ "$PWD" = "/app" ]; then cd /workspace/cloud-agy-orchestrator 2>/dev/null || true; fi\n' >> /etc/bash.bashrc \
     && printf 'if [ -n "$AGY_TARGET_REPO" ]; then mkdir -p "/workspace/$AGY_TARGET_REPO" 2>/dev/null; cd "/workspace/$AGY_TARGET_REPO" 2>/dev/null || true; elif [ "$PWD" = "/" ] || [ "$PWD" = "/root" ] || [ "$PWD" = "/app" ]; then cd /workspace/cloud-agy-orchestrator 2>/dev/null || true; fi\n' >> /etc/profile \
     && printf '\nif [ -n "$AGY_TARGET_REPO" ]; then mkdir -p "/workspace/$AGY_TARGET_REPO" 2>/dev/null; cd "/workspace/$AGY_TARGET_REPO" 2>/dev/null || true; elif [ "$PWD" = "/" ] || [ "$PWD" = "/root" ] || [ "$PWD" = "/app" ]; then cd /workspace/cloud-agy-orchestrator 2>/dev/null || true; fi\nif [ -t 0 ]; then exec /usr/local/bin/agy; fi\n' >> /root/.bashrc \
-    && printf '#!/bin/bash\nTARGET="${1:-${AGY_TARGET_REPO:-cloud-agy-orchestrator}}"\nTARGET_PATH="/workspace/$TARGET"\nmkdir -p "$TARGET_PATH" && cd "$TARGET_PATH"\nexec /usr/local/bin/agy "${@:2}"\n' > /usr/local/bin/open-agy \
+    && printf '#!/bin/bash\nTARGET="${1:-${AGY_TARGET_REPO:-cloud-agy-orchestrator}}"\nTARGET_PATH="/workspace/$TARGET"\nmkdir -p "$TARGET_PATH" && cd "$TARGET_PATH"\nif [ -x /usr/local/bin/agy ]; then exec /usr/local/bin/agy "${@:2}"; else exec /bin/bash -i; fi\n' > /usr/local/bin/open-agy \
     && chmod +x /usr/local/bin/open-agy
 
 WORKDIR /app

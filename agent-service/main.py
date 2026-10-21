@@ -295,10 +295,9 @@ def prepare_cached_repo(repo: str, branch: str) -> tuple[Path, str]:
 
     repo_dir = HOT_WORKSPACE_ROOT / repo
     archive_path = COLD_CACHE_ROOT / f"{repo}.tar.zst"
-    if GITHUB_PAT:
-        remote_url = f"https://x-access-token:{GITHUB_PAT}@github.com/{GITHUB_OWNER}/{repo}.git"
-    else:
-        remote_url = f"https://github.com/{GITHUB_OWNER}/{repo}.git"
+    public_url = f"https://github.com/{GITHUB_OWNER}/{repo}.git"
+    auth_url = f"https://x-access-token:{GITHUB_PAT}@github.com/{GITHUB_OWNER}/{repo}.git" if GITHUB_PAT else public_url
+    remote_url = auth_url
     cache_status = "COLD_CLONE"
 
     if (repo_dir / ".git").exists():
@@ -308,7 +307,8 @@ def prepare_cached_repo(repo: str, branch: str) -> tuple[Path, str]:
             subprocess.run(["git", "fetch", "--depth=1", "origin", branch], cwd=repo_dir, check=True)
             subprocess.run(["git", "checkout", "-B", branch, f"origin/{branch}"], cwd=repo_dir, check=True)
         except Exception:
-            pass
+            subprocess.run(["git", "remote", "set-url", "origin", public_url], cwd=repo_dir, check=False)
+            subprocess.run(["git", "fetch", "--depth=1", "origin", branch], cwd=repo_dir, check=False)
         subprocess.run(["git", "clean", "-fd", "-e", ".agy_session"], cwd=repo_dir, check=False)
 
     elif archive_path.exists():
@@ -320,17 +320,28 @@ def prepare_cached_repo(repo: str, branch: str) -> tuple[Path, str]:
             subprocess.run(["git", "fetch", "--depth=1", "origin", branch], cwd=repo_dir, check=True)
             subprocess.run(["git", "checkout", "-B", branch, f"origin/{branch}"], cwd=repo_dir, check=True)
         except Exception:
-            pass
+            subprocess.run(["git", "remote", "set-url", "origin", public_url], cwd=repo_dir, check=False)
 
     else:
-        clone_cmd = ["git", "clone", "--depth=1"]
-        if branch:
-            clone_cmd.extend(["--branch", branch])
-        clone_cmd.extend([remote_url, str(repo_dir)])
-        try:
-            subprocess.run(clone_cmd, check=True)
-        except Exception:
-            subprocess.run(["git", "clone", "--depth=1", remote_url, str(repo_dir)], check=True)
+        # Check if directory exists but lacks .git (e.g. from prior failed clone)
+        if repo_dir.exists() and not (repo_dir / ".git").exists():
+            temp_clone = Path(f"/tmp/clone_{repo}")
+            if temp_clone.exists():
+                shutil.rmtree(temp_clone, ignore_errors=True)
+            try:
+                subprocess.run(["git", "clone", "--depth=1", remote_url, str(temp_clone)], check=True)
+            except Exception:
+                subprocess.run(["git", "clone", "--depth=1", public_url, str(temp_clone)], check=True)
+            for item in temp_clone.iterdir():
+                dest = repo_dir / item.name
+                if not dest.exists():
+                    shutil.move(str(item), str(dest))
+            shutil.rmtree(temp_clone, ignore_errors=True)
+        else:
+            try:
+                subprocess.run(["git", "clone", "--depth=1", remote_url, str(repo_dir)], check=True)
+            except Exception:
+                subprocess.run(["git", "clone", "--depth=1", public_url, str(repo_dir)], check=True)
 
     # Copy pre-cached Stitch skills into repo if not already present
     baked_stitch = TOOLS_DIR / "skills" / ".stitch"
@@ -949,14 +960,24 @@ async def websocket_terminal(websocket: WebSocket, repo: str = "cloud-agy-orches
         env["FORCE_COLOR"] = "1"
         env["PYTHONUNBUFFERED"] = "1"
 
+        def set_controlling_terminal():
+            try:
+                os.setsid()
+                fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+            except Exception:
+                pass
+
+        shell_bin = "/usr/local/bin/open-agy" if Path("/usr/local/bin/open-agy").exists() else "/bin/bash"
+        proc_args = [shell_bin, repo_clean] if shell_bin == "/usr/local/bin/open-agy" else [shell_bin, "-i"]
+
         proc = await asyncio.create_subprocess_exec(
-            "/bin/bash",
-            "-i",
+            *proc_args,
             cwd=str(repo_dir),
             env=env,
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
+            preexec_fn=set_controlling_terminal,
             close_fds=True
         )
         os.close(slave_fd)

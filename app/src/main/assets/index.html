@@ -972,8 +972,13 @@
       }
     }
 
+    let isNavigating = false;
+
     // View Navigation
     function openProjectTerminal(repo) {
+      if (isNavigating) return;
+      isNavigating = true;
+
       // Disconnect any active shell before switching projects
       disconnectActiveShell();
 
@@ -1015,15 +1020,18 @@
       promptInput.focus();
 
       window.scrollTo({ top: 0, behavior: 'smooth' });
+      setTimeout(() => { isNavigating = false; }, 100);
     }
 
     function closeProjectTerminal() {
       disconnectActiveShell();
       document.getElementById('terminal-view').classList.remove('active');
       document.getElementById('projects-view').classList.remove('hidden');
-      if (window.location.hash) {
-        history.pushState(null, null, ' ');
-      }
+
+      isNavigating = true;
+      window.location.hash = '#projects';
+      setTimeout(() => { isNavigating = false; }, 100);
+
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
@@ -1101,10 +1109,6 @@
         }
 
         pillsContainer.innerHTML = html;
-
-        if (term) {
-          term.writeln(`\x1b[90m[SESSION] Active context set to: ${currentSessionId || 'Last Active'}\x1b[0m`);
-        }
 
       } catch (err) {
         console.warn('Could not fetch project sessions:', err);
@@ -1633,6 +1637,7 @@
       }
 
       window.addEventListener('hashchange', () => {
+        if (isNavigating) return;
         if (window.location.hash.startsWith('#project/')) {
           const repoName = decodeURIComponent(window.location.hash.replace('#project/', ''));
           if (PROJECTS.some(p => p.repo === repoName) && (currentRepo !== repoName || !document.getElementById('terminal-view').classList.contains('active'))) {
