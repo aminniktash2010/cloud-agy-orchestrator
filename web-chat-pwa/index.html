@@ -504,6 +504,45 @@
     .terminal-xterm-host .xterm-viewport {
       background-color: #060911 !important;
     }
+    /* Mobile terminal accessory key bar — shown only on touch/coarse-pointer devices */
+    .term-keybar {
+      display: none;
+      gap: 0.4rem;
+      padding: 0.5rem 0.75rem;
+      background: #0f1626;
+      border-top: 1px solid var(--border);
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+    .term-keybar::-webkit-scrollbar { display: none; }
+    .term-keybar.visible { display: flex; }
+    .term-key {
+      flex: 0 0 auto;
+      min-width: 44px;
+      min-height: 44px;
+      padding: 0.4rem 0.6rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text);
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .term-key:active {
+      background: #25334a;
+      border-color: var(--accent);
+    }
+    .term-key-ctrl.active {
+      background: var(--accent);
+      color: #0b0f19;
+      border-color: var(--accent);
+    }
     .terminal-body {
       padding: 1rem;
       height: 380px;
@@ -973,6 +1012,18 @@
         </div>
 
         <div id="terminal-container" class="terminal-xterm-host"></div>
+        <!-- Mobile accessory key bar (touch devices only; wired in initTermKeybar) -->
+        <div id="term-keybar" class="term-keybar" role="toolbar" aria-label="Terminal keys">
+          <button type="button" class="term-key" data-key="tab" title="Tab (completion)">Tab</button>
+          <button type="button" class="term-key" data-key="esc" title="Escape">Esc</button>
+          <button type="button" class="term-key term-key-ctrl" data-key="ctrl" title="Sticky Ctrl — tap, then a letter">Ctrl</button>
+          <button type="button" class="term-key" data-key="up" title="Arrow up">↑</button>
+          <button type="button" class="term-key" data-key="down" title="Arrow down">↓</button>
+          <button type="button" class="term-key" data-key="left" title="Arrow left">←</button>
+          <button type="button" class="term-key" data-key="right" title="Arrow right">→</button>
+          <button type="button" class="term-key" data-key="ctrl-c" title="Ctrl+C (interrupt)">^C</button>
+          <button type="button" class="term-key" data-key="ctrl-d" title="Ctrl+D (EOF)">^D</button>
+        </div>
         <div id="terminal-fallback" class="terminal-body" style="display: none;">Connecting to Antigravity CLI...</div>
       </div>
 
@@ -1516,6 +1567,26 @@
             }
           });
 
+          // Sticky-Ctrl support for the mobile accessory key bar: when the Ctrl
+          // bar button is armed, the next letter typed converts to its control
+          // byte. Inert on desktop (termCtrlSticky can only be armed via the bar).
+          if (typeof term.attachCustomKeyEventHandler === 'function') {
+            term.attachCustomKeyEventHandler((ev) => {
+              if (!termCtrlSticky || ev.type !== 'keydown') return true;
+              const k = ev.key;
+              if (k && k.length === 1 && /[a-zA-Z]/.test(k) && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+                const code = k.toUpperCase().charCodeAt(0) - 64; // A..Z -> 1..26
+                if (code >= 1 && code <= 26) {
+                  ev.preventDefault();
+                  sendTerminalKeyData(String.fromCharCode(code));
+                  disarmTermCtrl();
+                  return false;
+                }
+              }
+              return true;
+            });
+          }
+
           isXtermReady = true;
           writeWelcomeBanner();
           return;
@@ -1553,6 +1624,87 @@
       if (autoScroll && isXtermReady && term) {
         term.scrollToBottom();
       }
+    }
+
+    // ------------------------------------------------------------------
+    // Mobile terminal accessory key bar (touch/coarse-pointer devices only).
+    // Sends the exact byte sequences a physical keyboard would produce,
+    // through the SAME WebSocket send path as term.onData (no local echo —
+    // the PTY echoes back). Desktop keyboard handling is untouched.
+    // ------------------------------------------------------------------
+    const TERM_KEY_SEQUENCES = {
+      'tab': '\t',          // 0x09
+      'esc': '\x1b',         // 0x1B
+      'up': '\x1b[A',
+      'down': '\x1b[B',
+      'right': '\x1b[C',
+      'left': '\x1b[D',
+      'ctrl-c': '\x03',      // ETX — interrupt
+      'ctrl-d': '\x04'       // EOT — EOF
+    };
+    let termCtrlSticky = false;
+    let termKeyLastTouchTs = 0;
+
+    function isTouchDevice() {
+      if (typeof window === 'undefined') return false;
+      const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+      return coarse || ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+    }
+
+    function focusTerminal() {
+      // Keep xterm focused so the iOS software keyboard stays up.
+      if (term && typeof term.focus === 'function') {
+        try { term.focus(); } catch (e) { /* terminal not ready — ignore */ }
+      }
+    }
+
+    function sendTerminalKeyData(data) {
+      // Same WS send path as term.onData — guarded identically.
+      if (activeTab === 'shell' && wsSession && wsSession.readyState === WebSocket.OPEN) {
+        wsSession.send(JSON.stringify({ type: 'input', data }));
+      }
+      focusTerminal();
+    }
+
+    function disarmTermCtrl() {
+      termCtrlSticky = false;
+      const btn = document.querySelector('#term-keybar [data-key="ctrl"]');
+      if (btn) btn.classList.remove('active');
+    }
+
+    function handleTermKeyPress(kind) {
+      if (kind === 'ctrl') {
+        termCtrlSticky = !termCtrlSticky;
+        const btn = document.querySelector('#term-keybar [data-key="ctrl"]');
+        if (btn) btn.classList.toggle('active', termCtrlSticky);
+        focusTerminal();
+        return;
+      }
+      const seq = TERM_KEY_SEQUENCES[kind];
+      if (seq) sendTerminalKeyData(seq);
+      if (termCtrlSticky) disarmTermCtrl();
+    }
+
+    function initTermKeybar() {
+      const bar = document.getElementById('term-keybar');
+      if (!bar) return;
+      if (isTouchDevice()) bar.classList.add('visible');
+      bar.querySelectorAll('.term-key').forEach((btn) => {
+        const kind = btn.getAttribute('data-key');
+        // touchstart + preventDefault: no focus steal (iOS keyboard stays up),
+        // no 300ms delay, no synthetic click afterwards.
+        btn.addEventListener('touchstart', (e) => {
+          e.preventDefault();
+          termKeyLastTouchTs = Date.now();
+          handleTermKeyPress(kind);
+        }, { passive: false });
+        // click fallback for mouse / hybrid devices; ignores the synthetic
+        // click that follows a handled touchstart.
+        btn.addEventListener('click', () => {
+          if (Date.now() - termKeyLastTouchTs < 600) return;
+          handleTermKeyPress(kind);
+        });
+      });
     }
 
     function clearTerminal() {
@@ -1906,6 +2058,7 @@
       renderCatalogGrid();
       refreshHubStatus(false);
       startHubAutoRefresh();
+      initTermKeybar();
 
       const promptInput = document.getElementById('terminal-prompt');
       promptInput.addEventListener('keydown', (e) => {
