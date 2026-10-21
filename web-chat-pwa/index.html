@@ -736,6 +736,113 @@
       border: none;
       background: #090d16;
     }
+
+    /* Model Hub status panel */
+    .hub-panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.1rem;
+      margin: 1rem 0;
+    }
+    .hub-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+    .hub-panel-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .hub-panel-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .hub-updated {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .hub-error {
+      font-size: 0.82rem;
+      color: var(--warning);
+      background: rgba(245, 158, 11, 0.08);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      border-radius: 6px;
+      padding: 0.45rem 0.7rem;
+      margin-bottom: 0.7rem;
+    }
+    .hub-tiers {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 0.7rem;
+    }
+    .hub-loading {
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    .hub-tier {
+      background: var(--card-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.7rem 0.8rem;
+      font-size: 0.8rem;
+      position: relative;
+    }
+    .hub-tier.tier-disabled { opacity: 0.55; }
+    .hub-tier.tier-open { border-color: var(--warning); }
+    .hub-tier-order {
+      position: absolute;
+      top: 0.55rem;
+      right: 0.7rem;
+      font-size: 0.7rem;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .hub-tier-name {
+      font-weight: 700;
+      color: var(--text);
+      font-size: 0.9rem;
+      margin-bottom: 0.4rem;
+      padding-right: 2rem;
+    }
+    .hub-tier-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+      margin-bottom: 0.45rem;
+    }
+    .hub-badge {
+      font-size: 0.68rem;
+      padding: 0.12rem 0.45rem;
+      border-radius: 999px;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      background: rgba(148, 163, 184, 0.08);
+    }
+    .hub-badge.ok { color: var(--success); border-color: rgba(16,185,129,0.4); background: rgba(16,185,129,0.08); }
+    .hub-badge.warn { color: var(--warning); border-color: rgba(245,158,11,0.4); background: rgba(245,158,11,0.08); }
+    .hub-badge.bad { color: var(--error); border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.08); }
+    .hub-badge.info { color: var(--accent); border-color: rgba(56,189,248,0.35); background: rgba(56,189,248,0.08); }
+    .hub-tier-usage {
+      color: var(--muted);
+      font-size: 0.75rem;
+      margin-bottom: 0.3rem;
+    }
+    .hub-tier-models {
+      color: var(--muted);
+      font-size: 0.72rem;
+      line-height: 1.4;
+      word-break: break-word;
+    }
   </style>
 </head>
 <body>
@@ -763,6 +870,24 @@
         <div>
           <button class="btn-mini" onclick="syncDriveNow()">☁ Sync Catalog to Drive</button>
         </div>
+      </div>
+
+      <!-- ========================================== -->
+      <!-- MODEL HUB: PROVIDER LADDER STATUS          -->
+      <!-- ========================================== -->
+      <div class="hub-panel" id="hub-panel">
+        <div class="hub-panel-header">
+          <div class="hub-panel-title">
+            <span>🧠 Model Hub — Provider Ladder</span>
+            <span id="hub-paid-badge" class="badge" style="display:none;">💰 paid tier on</span>
+          </div>
+          <div class="hub-panel-actions">
+            <span id="hub-updated" class="hub-updated">loading…</span>
+            <button class="btn-mini" onclick="refreshHubStatus(true)">🔄 Refresh</button>
+          </div>
+        </div>
+        <div id="hub-error" class="hub-error" style="display:none;">⚠️ hub unreachable — retrying…</div>
+        <div id="hub-tiers" class="hub-tiers"><div class="hub-loading">Loading hub status…</div></div>
       </div>
 
       <div id="projects-grid" class="grid"></div>
@@ -953,6 +1078,96 @@
           </div>
         </div>
       `).join('');
+    }
+
+    // ============ MODEL HUB STATUS PANEL ============
+    const HUB_STATUS_URL = `${CLOUD_RUN_BASE}/hub/status`;
+    let hubRefreshTimer = null;
+
+    function hubEsc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    function hubCostBadge(cost) {
+      if (cost === 'free') return '<span class="hub-badge ok">🆓 free</span>';
+      if (cost === 'credits') return '<span class="hub-badge warn">💳 credits</span>';
+      if (cost === 'paid') return '<span class="hub-badge bad">💰 paid</span>';
+      return `<span class="hub-badge">${hubEsc(cost)}</span>`;
+    }
+
+    function renderHubStatus(data) {
+      const wrap = document.getElementById('hub-tiers');
+      if (!wrap) return;
+      const errBox = document.getElementById('hub-error');
+      if (errBox) errBox.style.display = 'none';
+      const paidBadge = document.getElementById('hub-paid-badge');
+      if (paidBadge) paidBadge.style.display = (data.paid && data.paid.enabled) ? '' : 'none';
+      const tiers = (data.tiers || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+      if (!tiers.length) {
+        wrap.innerHTML = '<div class="hub-loading">No tiers configured.</div>';
+        return;
+      }
+      wrap.innerHTML = tiers.map(t => {
+        const cap = t.capability === 'agent_loop'
+          ? '<span class="hub-badge info">🤖 agent</span>'
+          : '<span class="hub-badge">💬 answers</span>';
+        const en = t.enabled
+          ? '<span class="hub-badge ok">✓ enabled</span>'
+          : '<span class="hub-badge">✗ disabled</span>';
+        // agy tier authenticates via Antigravity OAuth, not an API key
+        const key = t.key_configured
+          ? '<span class="hub-badge ok">🔑 key ✓</span>'
+          : (t.id === 'agy'
+            ? '<span class="hub-badge ok">🔑 oauth</span>'
+            : '<span class="hub-badge warn">🔑 key ✗</span>');
+        const circuit = t.circuit === 'open'
+          ? '<span class="hub-badge warn">🟠 cooling down</span>'
+          : '<span class="hub-badge ok">🟢 healthy</span>';
+        const usage = (t.daily_request_cap == null)
+          ? `${t.requests_today || 0} / ∞ today`
+          : `${t.requests_today || 0} / ${t.daily_request_cap} today`;
+        const cardCls = 'hub-tier'
+          + (t.enabled ? '' : ' tier-disabled')
+          + (t.circuit === 'open' ? ' tier-open' : '');
+        const models = (t.models || []).map(hubEsc).join(', ');
+        return `<div class="${cardCls}">
+          <div class="hub-tier-order">#${(t.order || 0) + 1}</div>
+          <div class="hub-tier-name">${hubEsc(t.provider)}</div>
+          <div class="hub-tier-badges">${cap}${en}${key}${circuit}${hubCostBadge(t.cost)}</div>
+          <div class="hub-tier-usage">📊 ${hubEsc(usage)}</div>
+          <div class="hub-tier-models">${models}</div>
+        </div>`;
+      }).join('');
+      const ts = document.getElementById('hub-updated');
+      if (ts) ts.textContent = 'updated ' + new Date().toLocaleTimeString();
+    }
+
+    async function refreshHubStatus(manual) {
+      try {
+        const res = await fetch(HUB_STATUS_URL, { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        renderHubStatus(await res.json());
+      } catch (e) {
+        // Graceful degradation: show the banner, keep old data, never break the PWA
+        const errBox = document.getElementById('hub-error');
+        if (errBox) errBox.style.display = '';
+        if (manual) {
+          const ts = document.getElementById('hub-updated');
+          if (ts) ts.textContent = 'refresh failed — retrying…';
+        }
+      }
+    }
+
+    function startHubAutoRefresh() {
+      if (hubRefreshTimer) return;
+      hubRefreshTimer = setInterval(() => {
+        if (document.hidden) return;
+        const pv = document.getElementById('projects-view');
+        if (pv && pv.classList.contains('hidden')) return; // panel not visible
+        refreshHubStatus(false);
+      }, 60000);
     }
 
     // Clean WebSocket Disconnect & Teardown
@@ -1619,6 +1834,8 @@
     // Keyboard shortcut for prompt
     document.addEventListener('DOMContentLoaded', () => {
       renderCatalogGrid();
+      refreshHubStatus(false);
+      startHubAutoRefresh();
 
       const promptInput = document.getElementById('terminal-prompt');
       promptInput.addEventListener('keydown', (e) => {
