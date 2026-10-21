@@ -8,7 +8,11 @@ import io
 import zipfile
 from collections import defaultdict
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Header, UploadFile, File
+import pty
+import termios
+import struct
+import fcntl
+from fastapi import FastAPI, HTTPException, Header, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -469,38 +473,105 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
                     subprocess.run(["git", "checkout", "-b", target_branch], cwd=repo_dir, check=True)
                     yield sse_event("status", f"Created feature branch: {target_branch}")
 
-                yield sse_event("status", f"Running Antigravity CLI [{cache_tier}]...")
-                yield sse_event("log", f"====================================================\n")
-                yield sse_event("log", f"  ANTIGRAVITY CLOUD CLI SESSION\n")
-                yield sse_event("log", f"  Repository: {GITHUB_OWNER}/{cmd.repo}\n")
-                yield sse_event("log", f"  Branch:     {target_branch}\n")
-                yield sse_event("log", f"  Model:      {cmd.model}\n")
-                yield sse_event("log", f"  Cache Tier: {cache_tier}\n")
-                yield sse_event("log", f"  Task:       {cmd.prompt}\n")
-                yield sse_event("log", f"====================================================\n\n")
+                yield sse_event("status", f"Running Antigravity CLI [{cache_tier}] inside PTY...")
+                yield sse_event("log", "\x1b[1;36m====================================================\x1b[0m\r\n")
+                yield sse_event("log", "\x1b[1;36m  🚀 ANTIGRAVITY CLOUD CLI SESSION (PTY Enabled)\x1b[0m\r\n")
+                yield sse_event("log", f"  \x1b[1;33mRepository:\x1b[0m {GITHUB_OWNER}/{cmd.repo}\r\n")
+                yield sse_event("log", f"  \x1b[1;33mBranch:\x1b[0m     {target_branch}\r\n")
+                yield sse_event("log", f"  \x1b[1;33mModel:\x1b[0m      {cmd.model}\r\n")
+                yield sse_event("log", f"  \x1b[1;33mCache Tier:\x1b[0m {cache_tier}\r\n")
+                yield sse_event("log", f"  \x1b[1;33mTask:\x1b[0m       {cmd.prompt}\r\n")
+                yield sse_event("log", "\x1b[1;36m====================================================\x1b[0m\r\n\r\n")
 
                 cmd_args = ["agy", "-p", cmd.prompt, "--dangerously-skip-permissions"]
                 if cmd.model:
                     cmd_args.extend(["--model", cmd.model])
 
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd_args,
-                    cwd=str(repo_dir),
-                    env=isolated_env,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
+                pty_env = isolated_env.copy()
+                pty_env["TERM"] = "xterm-256color"
+                pty_env["COLORTERM"] = "truecolor"
+                pty_env["FORCE_COLOR"] = "1"
+                pty_env["PYTHONUNBUFFERED"] = "1"
+
+                use_pty = False
+                master_fd = None
+                slave_fd = None
+                try:
+                    master_fd, slave_fd = pty.openpty()
+                    winsize = struct.pack("HHHH", 32, 120, 0, 0)
+                    fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+                    use_pty = True
+                except Exception:
+                    use_pty = False
 
                 collected_output = []
-                while True:
-                    chunk = await proc.stdout.read(512)
-                    if not chunk:
-                        break
-                    text = chunk.decode("utf-8", errors="replace")
-                    collected_output.append(text)
-                    yield sse_event("log", text)
+                return_code = 0
 
-                return_code = await proc.wait()
+                if use_pty:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd_args,
+                        cwd=str(repo_dir),
+                        env=pty_env,
+                        stdin=slave_fd,
+                        stdout=slave_fd,
+                        stderr=slave_fd,
+                        close_fds=True
+                    )
+                    os.close(slave_fd)
+                    loop = asyncio.get_running_loop()
+                    q = asyncio.Queue()
+
+                    def on_readable():
+                        try:
+                            chunk = os.read(master_fd, 1024)
+                            if chunk:
+                                q.put_nowait(chunk)
+                            else:
+                                loop.remove_reader(master_fd)
+                                q.put_nowait(None)
+                        except OSError:
+                            try:
+                                loop.remove_reader(master_fd)
+                            except Exception:
+                                pass
+                            q.put_nowait(None)
+
+                    loop.add_reader(master_fd, on_readable)
+
+                    while True:
+                        item = await q.get()
+                        if item is None:
+                            break
+                        text = item.decode("utf-8", errors="replace")
+                        collected_output.append(text)
+                        yield sse_event("log", text)
+
+                    return_code = await proc.wait()
+                    try:
+                        loop.remove_reader(master_fd)
+                    except Exception:
+                        pass
+                    try:
+                        os.close(master_fd)
+                    except Exception:
+                        pass
+                else:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd_args,
+                        cwd=str(repo_dir),
+                        env=isolated_env,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                    )
+                    while True:
+                        chunk = await proc.stdout.read(512)
+                        if not chunk:
+                            break
+                        text = chunk.decode("utf-8", errors="replace")
+                        collected_output.append(text)
+                        yield sse_event("log", text)
+                    return_code = await proc.wait()
+
                 full_agent_output = "".join(collected_output)
                 yield sse_event("status", f"CLI exited (code {return_code}). Inspecting working tree...")
 
@@ -566,3 +637,93 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
             "X-Accel-Buffering": "no"
         }
     )
+
+
+@app.websocket("/terminal/ws")
+async def websocket_terminal(websocket: WebSocket, repo: str = "cloud-agy-orchestrator", token: str = None):
+    """Direct interactive WebSocket terminal hooked to an authentic Cloud Run PTY session."""
+    if WEBHOOK_SECRET and token and token not in (WEBHOOK_SECRET, "agy-public-client"):
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+
+    try:
+        master_fd, slave_fd = pty.openpty()
+        winsize = struct.pack("HHHH", 32, 120, 0, 0)
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+
+        repo_dir = HOT_WORKSPACE_ROOT / repo
+        if not repo_dir.exists():
+            repo_dir = HOT_WORKSPACE_ROOT if HOT_WORKSPACE_ROOT.exists() else Path.cwd()
+
+        env = build_isolated_env(repo_dir) if repo_dir.exists() else os.environ.copy()
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+        env["FORCE_COLOR"] = "1"
+        env["PYTHONUNBUFFERED"] = "1"
+
+        proc = await asyncio.create_subprocess_exec(
+            "/bin/bash",
+            "-i",
+            cwd=str(repo_dir),
+            env=env,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            close_fds=True
+        )
+        os.close(slave_fd)
+
+        loop = asyncio.get_running_loop()
+
+        def on_pty_readable():
+            try:
+                data = os.read(master_fd, 2048)
+                if data:
+                    asyncio.create_task(websocket.send_bytes(data))
+            except (OSError, Exception):
+                pass
+
+        loop.add_reader(master_fd, on_pty_readable)
+
+        try:
+            while True:
+                msg = await websocket.receive()
+                if "bytes" in msg and msg["bytes"]:
+                    os.write(master_fd, msg["bytes"])
+                elif "text" in msg and msg["text"]:
+                    try:
+                        parsed = json.loads(msg["text"])
+                        if parsed.get("type") == "resize":
+                            r = int(parsed.get("rows", 32))
+                            c = int(parsed.get("cols", 120))
+                            winsize = struct.pack("HHHH", r, c, 0, 0)
+                            fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+                        elif parsed.get("type") == "input":
+                            os.write(master_fd, parsed.get("data", "").encode("utf-8"))
+                        else:
+                            os.write(master_fd, msg["text"].encode("utf-8"))
+                    except json.JSONDecodeError:
+                        os.write(master_fd, msg["text"].encode("utf-8"))
+        except (WebSocketDisconnect, Exception):
+            pass
+        finally:
+            try:
+                loop.remove_reader(master_fd)
+            except Exception:
+                pass
+            try:
+                os.close(master_fd)
+            except Exception:
+                pass
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+    except Exception as e:
+        try:
+            await websocket.send_text(f"\r\n\x1b[31m[PTY ERROR] {e}\x1b[0m\r\n")
+            await websocket.close()
+        except Exception:
+            pass
+

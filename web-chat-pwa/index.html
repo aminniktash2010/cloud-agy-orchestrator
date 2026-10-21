@@ -4,6 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Antigravity Cloud Command Center</title>
+
+  <!-- xterm.js PTY Terminal Library & Addons -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.js"></script>
+
   <style>
     :root {
       --bg: #0b0f19;
@@ -86,7 +93,7 @@
       cursor: not-allowed;
     }
 
-    /* Terminal Console */
+    /* Terminal Console & xterm.js Host */
     .terminal-container {
       margin-top: 1.25rem;
       border: 1px solid var(--border);
@@ -101,6 +108,8 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
+      flex-wrap: wrap;
+      gap: 0.5rem;
       border-bottom: 1px solid var(--border);
       font-size: 0.8rem;
     }
@@ -111,29 +120,85 @@
       align-items: center;
       gap: 0.5rem;
     }
+    .terminal-mode-badge {
+      font-size: 0.68rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      font-weight: 600;
+    }
     .terminal-controls {
       display: flex;
       align-items: center;
-      gap: 0.6rem;
+      gap: 0.4rem;
+      flex-wrap: wrap;
     }
     .term-btn {
       background: #1e293b;
       color: var(--muted);
       border: 1px solid var(--border);
-      padding: 0.2rem 0.55rem;
+      padding: 0.25rem 0.55rem;
       font-size: 0.72rem;
       border-radius: 5px;
       cursor: pointer;
       width: auto;
       margin: 0;
+      transition: all 0.15s ease;
     }
     .term-btn:hover {
       color: var(--text);
       border-color: var(--accent);
+      background: #25334a;
+    }
+    .term-tabs-bar {
+      display: flex;
+      gap: 0.35rem;
+      background: #0b101c;
+      padding: 0.4rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      align-items: center;
+    }
+    .term-tab {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid transparent;
+      padding: 0.3rem 0.65rem;
+      font-size: 0.75rem;
+      border-radius: 6px;
+      cursor: pointer;
+      width: auto;
+      margin: 0;
+      font-weight: 600;
+      transition: all 0.15s;
+    }
+    .term-tab:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .term-tab.active {
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent);
+      border-color: rgba(56, 189, 248, 0.35);
+    }
+    .terminal-xterm-host {
+      padding: 0.5rem 0.75rem;
+      height: 380px;
+      background: #060911;
+      box-sizing: border-box;
+      overflow: hidden;
+      position: relative;
+    }
+    .terminal-xterm-host .xterm {
+      height: 100%;
+    }
+    .terminal-xterm-host .xterm-viewport {
+      background-color: #060911 !important;
     }
     .terminal-body {
       padding: 1rem;
-      height: 320px;
+      height: 380px;
       max-height: 460px;
       overflow-y: auto;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
@@ -143,15 +208,32 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
-    .term-line-system {
-      color: #38bdf8;
-      font-weight: 600;
-      display: block;
+    .interactive-bar {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.4rem 0.75rem;
+      background: #090e18;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.75rem;
+      color: var(--muted);
     }
-    .term-line-error {
-      color: #f87171;
+    .interactive-bar.active {
+      display: flex;
+    }
+    .interactive-actions {
+      display: flex;
+      gap: 0.4rem;
+      align-items: center;
+    }
+    .interactive-btn {
+      width: auto;
+      margin: 0;
+      padding: 0.25rem 0.6rem;
+      font-size: 0.72rem;
+      border-radius: 5px;
       font-weight: 600;
-      display: block;
+      cursor: pointer;
     }
     .term-pulse {
       display: inline-block;
@@ -328,7 +410,7 @@
       <span class="status-pill"><span class="term-pulse"></span> Cloud Run Connected (Zero-Auth)</span>
     </div>
     <p style="margin: 0.25rem 0 1rem 0; font-size: 0.88rem; color: var(--muted);">
-      Fully Automated AI App Factory • Live Streaming CLI Terminal • Instant Previews • Google Play Console Staging
+      Fully Automated AI App Factory • xterm.js PTY Terminal • Instant Previews • Google Play Console Staging
     </p>
 
     <label>Target Project for CLI Backend Chat (aminniktash2010)</label>
@@ -342,7 +424,7 @@
       <option value="SpeakConfidentTV">SpeakConfidentTV (React Native Android TV)</option>
       <option value="Home-Painting-Marketplace-">Home-Painting-Marketplace- (Web &amp; Mobile Marketplace)</option>
       <option value="gcp-wif-foundation">gcp-wif-foundation (GCP Keyless WIF Foundation)</option>
-      <option value="cloud-agy-orchestrator">cloud-agy-orchestrator (Cloud Run Agent Orchestrator)</option>
+      <option value="cloud-agy-orchestrator" selected>cloud-agy-orchestrator (Cloud Run Agent Orchestrator)</option>
     </select>
 
     <label>Antigravity AI Model Engine</label>
@@ -356,21 +438,37 @@
     <label>AI Architect &amp; CLI Backend Prompt</label>
     <textarea id="prompt" rows="3" placeholder="Describe the UI, feature, or update to build in Cloud Run for the selected project..."></textarea>
 
-    <button id="btn-execute" onclick="sendTask()">⚡ Execute Automated Build in Cloud Run (Live CLI Stream)</button>
+    <button id="btn-execute" onclick="sendTask()">⚡ Execute Automated Build in Cloud Run (Live PTY Stream)</button>
 
-    <!-- Terminal Console Window -->
+    <!-- Terminal Console Window (xterm.js + PTY) -->
     <div class="terminal-container">
       <div class="terminal-header">
         <div class="terminal-title">
           <span id="term-pulse" class="term-pulse"></span>
-          <span id="term-status">Terminal Ready • Real-Time Stream</span>
+          <span id="term-status">Terminal Ready • xterm.js PTY</span>
+          <span class="terminal-mode-badge" id="term-badge">PTY ENGINE</span>
         </div>
         <div class="terminal-controls">
-          <button class="term-btn" id="btn-autoscroll" onclick="toggleAutoScroll()">Scroll: ON</button>
-          <button class="term-btn" onclick="clearTerminal()">Clear</button>
+          <button class="term-btn" id="btn-autoscroll" onclick="toggleAutoScroll()" title="Toggle Auto-Scroll">Scroll: ON</button>
+          <button class="term-btn" onclick="fitTerminal()" title="Fit Terminal to Window">Fit ⛶</button>
+          <button class="term-btn" id="btn-copy" onclick="copyTerminalOutput()" title="Copy Terminal Output">📋 Copy</button>
+          <button class="term-btn" onclick="clearTerminal()" title="Clear Terminal Buffer">Clear</button>
+          <button class="term-btn" onclick="changeFontSize(-1)" title="Decrease Font Size">A-</button>
+          <button class="term-btn" onclick="changeFontSize(1)" title="Increase Font Size">A+</button>
         </div>
       </div>
-      <div id="terminal-body" class="terminal-body">Select a project and enter a prompt above, then click Execute to watch the Antigravity CLI work in real time.</div>
+      <div class="term-tabs-bar">
+        <button class="term-tab active" id="tab-build" onclick="switchTerminalTab('build')">⚡ Cloud Run Build Stream (PTY + SSE)</button>
+        <button class="term-tab" id="tab-shell" onclick="switchTerminalTab('shell')">💻 Interactive PTY Shell (WebSocket)</button>
+      </div>
+      <div class="interactive-bar" id="shell-bar">
+        <span id="shell-status">Direct bidirectional pseudo-terminal session inside Cloud Run container.</span>
+        <div class="interactive-actions">
+          <button class="interactive-btn" id="btn-shell-toggle" style="background:var(--accent);color:#0b0f19;border:none;" onclick="toggleShellSession()">⚡ Connect Shell</button>
+        </div>
+      </div>
+      <div id="terminal-container" class="terminal-xterm-host"></div>
+      <div id="terminal-fallback" class="terminal-body" style="display: none;">Select a project and enter a prompt above, then click Execute to watch the Antigravity CLI work in real time.</div>
     </div>
 
     <!-- Done Banner Card -->
@@ -405,6 +503,13 @@
 
     let autoScroll = true;
     let lastDoneData = null;
+    let term = null;
+    let fitAddon = null;
+    let webLinksAddon = null;
+    let isXtermReady = false;
+    let currentFontSize = 13;
+    let activeTab = 'build';
+    let wsSession = null;
 
     const PROJECTS = [
       { repo: 'AMPtech-Hub', stack: 'Android TV & Play Portal (SDK 36)', vis: 'Play Console', desc: 'AMPtech Hub launcher & Play Console portal for Android TV and mobile.' },
@@ -419,14 +524,243 @@
       { repo: 'cloud-agy-orchestrator', stack: 'Cloud Run + Android Hub', vis: 'Play Console', desc: 'Zero-Local-Compute Antigravity Cloud Orchestrator & Universal Preview Engine.' }
     ];
 
+    function initTerminal() {
+      const container = document.getElementById('terminal-container');
+      const fallback = document.getElementById('terminal-fallback');
+
+      if (typeof Terminal !== 'undefined') {
+        try {
+          term = new Terminal({
+            cursorBlink: true,
+            cursorStyle: 'bar',
+            fontSize: currentFontSize,
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+            lineHeight: 1.4,
+            convertEol: true,
+            scrollback: 5000,
+            theme: {
+              background: '#060911',
+              foreground: '#cbd5e1',
+              cursor: '#38bdf8',
+              cursorAccent: '#0b0f19',
+              selectionBackground: 'rgba(56, 189, 248, 0.35)',
+              black: '#1e293b',
+              red: '#f87171',
+              green: '#34d399',
+              yellow: '#fbbf24',
+              blue: '#60a5fa',
+              magenta: '#c084fc',
+              cyan: '#38bdf8',
+              white: '#f1f5f9',
+              brightBlack: '#475569',
+              brightRed: '#ef4444',
+              brightGreen: '#10b981',
+              brightYellow: '#f59e0b',
+              brightBlue: '#38bdf8',
+              brightMagenta: '#d8b4fe',
+              brightCyan: '#67e8f9',
+              brightWhite: '#ffffff'
+            }
+          });
+
+          if (typeof FitAddon !== 'undefined' && FitAddon.FitAddon) {
+            fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+          }
+          if (typeof WebLinksAddon !== 'undefined' && WebLinksAddon.WebLinksAddon) {
+            webLinksAddon = new WebLinksAddon.WebLinksAddon();
+            term.loadAddon(webLinksAddon);
+          }
+
+          term.open(container);
+          if (fitAddon) {
+            setTimeout(() => fitAddon.fit(), 80);
+          }
+          window.addEventListener('resize', () => {
+            if (fitAddon) fitAddon.fit();
+          });
+
+          term.onData(data => {
+            if (activeTab === 'shell' && wsSession && wsSession.readyState === WebSocket.OPEN) {
+              wsSession.send(JSON.stringify({ type: 'input', data }));
+            }
+          });
+
+          isXtermReady = true;
+          writeWelcomeBanner();
+          return;
+        } catch (e) {
+          console.warn('xterm.js initialization error, falling back to standard view:', e);
+        }
+      }
+
+      isXtermReady = false;
+      container.style.display = 'none';
+      fallback.style.display = 'block';
+    }
+
+    function writeWelcomeBanner() {
+      if (!isXtermReady || !term) return;
+      term.writeln('\x1b[1;36m==================================================================\x1b[0m');
+      term.writeln('\x1b[1;36m  🚀 ANTIGRAVITY CLOUD COMMAND CENTER • xterm.js PTY Terminal\x1b[0m');
+      term.writeln('\x1b[90m  Cloud Run v2 (us-central1) • Zero-Local-Compute • PTY ANSI Stream\x1b[0m');
+      term.writeln('\x1b[1;36m==================================================================\x1b[0m');
+      term.writeln('\x1b[32m✔ Terminal initialized and ready.\x1b[0m Select a project and execute a prompt,');
+      term.writeln('\x1b[90mor switch to the Interactive PTY Shell tab for direct bash access.\x1b[0m\r\n');
+    }
+
+    function fitTerminal() {
+      if (fitAddon && isXtermReady) {
+        fitAddon.fit();
+        if (wsSession && wsSession.readyState === WebSocket.OPEN && term) {
+          wsSession.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+        }
+      }
+    }
+
     function toggleAutoScroll() {
       autoScroll = !autoScroll;
       document.getElementById('btn-autoscroll').textContent = `Scroll: ${autoScroll ? 'ON' : 'OFF'}`;
+      if (autoScroll && isXtermReady && term) {
+        term.scrollToBottom();
+      }
     }
 
     function clearTerminal() {
-      document.getElementById('terminal-body').textContent = '';
+      if (isXtermReady && term) {
+        term.clear();
+      }
+      document.getElementById('terminal-fallback').textContent = '';
       document.getElementById('result-card').classList.remove('active');
+    }
+
+    function changeFontSize(delta) {
+      if (!isXtermReady || !term) return;
+      currentFontSize = Math.max(10, Math.min(22, currentFontSize + delta));
+      term.options.fontSize = currentFontSize;
+      fitTerminal();
+    }
+
+    function copyTerminalOutput() {
+      let text = '';
+      if (isXtermReady && term) {
+        if (term.hasSelection()) {
+          text = term.getSelection();
+        } else {
+          const buf = term.buffer.active;
+          const lines = [];
+          for (let i = 0; i < buf.length; i++) {
+            const line = buf.getLine(i);
+            if (line) lines.push(line.translateToString(true));
+          }
+          text = lines.join('\n').trim();
+        }
+      } else {
+        text = document.getElementById('terminal-fallback').textContent;
+      }
+
+      if (navigator.clipboard && text) {
+        navigator.clipboard.writeText(text).then(() => {
+          const btn = document.getElementById('btn-copy');
+          const old = btn.textContent;
+          btn.textContent = '✓ Copied';
+          setTimeout(() => btn.textContent = old, 1500);
+        });
+      }
+    }
+
+    function switchTerminalTab(tab) {
+      activeTab = tab;
+      const tabBuild = document.getElementById('tab-build');
+      const tabShell = document.getElementById('tab-shell');
+      const shellBar = document.getElementById('shell-bar');
+      const termBadge = document.getElementById('term-badge');
+
+      if (tab === 'build') {
+        tabBuild.classList.add('active');
+        tabShell.classList.remove('active');
+        shellBar.classList.remove('active');
+        termBadge.textContent = 'BUILD STREAM';
+      } else {
+        tabBuild.classList.remove('active');
+        tabShell.classList.add('active');
+        shellBar.classList.add('active');
+        termBadge.textContent = 'INTERACTIVE PTY';
+        fitTerminal();
+      }
+    }
+
+    function toggleShellSession() {
+      const btn = document.getElementById('btn-shell-toggle');
+      const status = document.getElementById('shell-status');
+      const repo = document.getElementById('repo').value;
+
+      if (wsSession && (wsSession.readyState === WebSocket.OPEN || wsSession.readyState === WebSocket.CONNECTING)) {
+        wsSession.close();
+        wsSession = null;
+        btn.textContent = '⚡ Connect Shell';
+        btn.style.background = 'var(--accent)';
+        btn.style.color = '#0b0f19';
+        status.textContent = 'Session closed. Click Connect Shell to open a new PTY session.';
+        return;
+      }
+
+      const wsProto = CLOUD_RUN_BASE.startsWith('https') ? 'wss:' : 'ws:';
+      const wsHost = CLOUD_RUN_BASE.replace(/^https?:\/\//, '');
+      const wsUrl = `${wsProto}//${wsHost}/terminal/ws?repo=${encodeURIComponent(repo)}&token=agy-public-client`;
+
+      btn.textContent = 'Connecting...';
+      btn.disabled = true;
+      status.textContent = `Connecting WebSocket PTY for '${repo}'...`;
+
+      try {
+        wsSession = new WebSocket(wsUrl);
+        wsSession.binaryType = 'arraybuffer';
+
+        wsSession.onopen = () => {
+          btn.disabled = false;
+          btn.textContent = '✕ Disconnect';
+          btn.style.background = '#ef4444';
+          btn.style.color = '#ffffff';
+          status.textContent = `Connected to Cloud Run PTY (${repo}). Type directly in terminal.`;
+          if (term) {
+            term.writeln(`\r\n\x1b[1;32m✔ Connected to interactive PTY for ${repo}\x1b[0m\r\n`);
+            fitTerminal();
+          }
+        };
+
+        wsSession.onmessage = (event) => {
+          if (typeof event.data === 'string') {
+            if (term) term.write(event.data);
+          } else {
+            const decoder = new TextDecoder();
+            const text = decoder.decode(event.data);
+            if (term) term.write(text);
+          }
+          if (autoScroll && term) term.scrollToBottom();
+        };
+
+        wsSession.onerror = (err) => {
+          console.error('WebSocket PTY error:', err);
+          status.textContent = 'WebSocket connection error.';
+        };
+
+        wsSession.onclose = () => {
+          btn.disabled = false;
+          btn.textContent = '⚡ Connect Shell';
+          btn.style.background = 'var(--accent)';
+          btn.style.color = '#0b0f19';
+          status.textContent = 'PTY session disconnected.';
+          if (term) {
+            term.writeln('\r\n\x1b[1;33m[PTY Session Closed]\x1b[0m\r\n');
+          }
+          wsSession = null;
+        };
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = '⚡ Connect Shell';
+        status.textContent = `Failed to connect: ${e.message}`;
+      }
     }
 
     function openPreview(repoName) {
@@ -478,36 +812,52 @@
       const repo = document.getElementById('repo').value;
       const model = document.getElementById('model').value;
       const prompt = document.getElementById('prompt').value.trim();
-      const termBody = document.getElementById('terminal-body');
       const termStatus = document.getElementById('term-status');
       const termPulse = document.getElementById('term-pulse');
       const btnExec = document.getElementById('btn-execute');
       const resCard = document.getElementById('result-card');
+      const fallback = document.getElementById('terminal-fallback');
 
       if (!prompt) {
         alert('Please enter a prompt describing what to build.');
         return;
       }
 
+      // Switch to Build Stream Tab
+      switchTerminalTab('build');
+
       btnExec.disabled = true;
       btnExec.textContent = '⏳ Streaming Antigravity CLI Execution in Cloud Run...';
       termPulse.className = 'term-pulse pulse-running';
       termStatus.textContent = `Connecting to ${repo} [${model}]...`;
-      termBody.textContent = '';
       resCard.classList.remove('active');
       lastDoneData = null;
 
-      function appendText(txt, className) {
-        if (className) {
-          const span = document.createElement('span');
-          span.className = className;
-          span.textContent = txt;
-          termBody.appendChild(span);
+      if (isXtermReady && term) {
+        term.writeln(`\r\n\x1b[1;36m▶ Dispatching Task to Cloud Run [${repo}]...\x1b[0m`);
+      } else {
+        fallback.textContent = `Connecting to Cloud Run for ${repo}...\n`;
+      }
+
+      function appendText(txt) {
+        if (isXtermReady && term) {
+          term.write(txt);
+          if (autoScroll) term.scrollToBottom();
         } else {
-          termBody.appendChild(document.createTextNode(txt));
+          fallback.appendChild(document.createTextNode(txt));
+          if (autoScroll) fallback.scrollTop = fallback.scrollHeight;
         }
-        if (autoScroll) {
-          termBody.scrollTop = termBody.scrollHeight;
+      }
+
+      function appendLine(txt, colorCode = '') {
+        if (isXtermReady && term) {
+          term.writeln(`\r\n${colorCode}${txt}\x1b[0m`);
+          if (autoScroll) term.scrollToBottom();
+        } else {
+          const div = document.createElement('div');
+          div.textContent = txt;
+          fallback.appendChild(div);
+          if (autoScroll) fallback.scrollTop = fallback.scrollHeight;
         }
       }
 
@@ -537,7 +887,7 @@
 
           buffer += decoder.decode(value, { stream: true });
           const messages = buffer.split('\n\n');
-          buffer = messages.pop(); // save incomplete line
+          buffer = messages.pop();
 
           for (const rawMsg of messages) {
             const trimmed = rawMsg.trim();
@@ -546,18 +896,19 @@
               const payload = JSON.parse(trimmed.slice(5).trim());
               if (payload.type === 'status') {
                 termStatus.textContent = payload.data;
-                appendText(`\n[STATUS] ${payload.data}\n`, 'term-line-system');
+                appendLine(`[STATUS] ${payload.data}`, '\x1b[1;34m');
               } else if (payload.type === 'log') {
                 appendText(payload.data);
               } else if (payload.type === 'done') {
                 termPulse.className = 'term-pulse';
                 termStatus.textContent = '✓ Build & Commit Finished';
                 lastDoneData = payload.data;
+                appendLine('✔ [BUILD COMPLETED] Artifacts committed and pushed to GitHub.', '\x1b[1;32m');
                 showDoneBanner(payload.data);
               } else if (payload.type === 'error') {
                 termPulse.className = 'term-pulse pulse-error';
                 termStatus.textContent = '✕ Error Encountered';
-                appendText(`\n[ERROR] ${payload.data}\n`, 'term-line-error');
+                appendLine(`[ERROR] ${payload.data}`, '\x1b[1;31m');
               }
             } catch (err) {
               console.error('Error parsing SSE data chunk:', err, trimmed);
@@ -567,10 +918,10 @@
       } catch (err) {
         termPulse.className = 'term-pulse pulse-error';
         termStatus.textContent = '✕ Stream Disconnected';
-        appendText(`\n[STREAM ERROR] ${err.message}\n`, 'term-line-error');
+        appendLine(`[STREAM ERROR] ${err.message}`, '\x1b[1;31m');
       } finally {
         btnExec.disabled = false;
-        btnExec.textContent = '⚡ Execute Automated Build in Cloud Run (Live CLI Stream)';
+        btnExec.textContent = '⚡ Execute Automated Build in Cloud Run (Live PTY Stream)';
       }
     }
 
@@ -599,6 +950,9 @@
 
       resCard.classList.add('active');
     }
+
+    // Initialize xterm.js when DOM is ready
+    window.addEventListener('DOMContentLoaded', initTerminal);
   </script>
 </body>
 </html>

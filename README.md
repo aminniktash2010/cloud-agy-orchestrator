@@ -22,10 +22,20 @@ A **100% Cloud-Native, Zero-Local-Compute, $0.00/month Free-Tier** mobile & web 
 
 ## Live Endpoints
 
-- **Web Chat PWA:** [https://aminniktash2010.github.io/cloud-agy-orchestrator/](https://aminniktash2010.github.io/cloud-agy-orchestrator/)
+- **Web Chat PWA (xterm.js PTY Interface):** [https://aminniktash2010.github.io/cloud-agy-orchestrator/](https://aminniktash2010.github.io/cloud-agy-orchestrator/)
 - **Cloud Run Service:** `https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app`
 - **Health Check:** `https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app/health`
+- **Agent Chat Stream (SSE + PTY):** `POST https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app/chat/stream`
+- **Interactive PTY Terminal (WebSocket):** `wss://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app/terminal/ws`
 - **Agent Chat Endpoint:** `POST https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app/chat` (Header: `x-webhook-token: <WEBHOOK_SECRET>`)
+
+### Features & Capabilities
+
+- **xterm.js True Terminal Emulation:** Authentic VT100 / xterm PTY rendering with dark high-contrast theme, full ANSI color palette, cursor styles, fit auto-resizing, and clickable web links.
+- **Real-Time Pseudo-Terminal (PTY) Execution:** Cloud Run allocates a pseudo-terminal master/slave pair (`pty.openpty`) preserving ANSI formatting, progress indicators, and terminal window sizing.
+- **Dual Terminal Modes:** Seamless toggle between automated **Cloud Run Build Stream** (SSE) and **Interactive PTY Shell** (WebSocket).
+- **Control Bar Utilities:** Instant auto-scroll toggle, window fitting (`Fit ⛶`), clipboard copy (`📋 Copy`), buffer clearing, and dynamic font size adjustments.
+
 
 ---
 
