@@ -68,11 +68,30 @@ def drive_footer(cfg: HubConfig) -> str:
     return "\n".join(lines)
 
 
+def _default_live_quota(tier_id: str) -> dict:
+    """Cold-start / absent-store block: honest `estimated`, never blank."""
+    return {
+        "quota_source": "estimated",
+        "quota_updated_at": None,
+        "remaining_pct": None,
+        "reset_in": None,
+        "detail": "live quota not reported yet",
+    }
+
+
 def status_payload(cfg: HubConfig, config_source: str,
                    breaker_snapshot: dict, quota_usage: dict[str, int],
                    quota_hints: dict[str, dict], key_status: dict[str, bool],
-                   spend_today_usd: float) -> dict:
-    """GET /hub/status body. Never contains secrets (AC-10)."""
+                   spend_today_usd: float, live_quota: dict | None = None) -> dict:
+    """GET /hub/status body. Never contains secrets (AC-10).
+
+    ``live_quota`` is the additive live-quota block from
+    ``LiveQuotaStore.snapshot()`` (live-quota Epic C, FR-4): per-tier
+    ``live_quota`` entries plus a top-level ``poller`` health block. Existing
+    fields stay byte-identical; the current PWA panel keeps working if the
+    block is absent.
+    """
+    lq_tiers = (live_quota or {}).get("tiers", {})
     tiers = []
     for t in cfg.tiers_sorted():
         tiers.append({
@@ -88,11 +107,15 @@ def status_payload(cfg: HubConfig, config_source: str,
             "daily_request_cap": t.daily_request_cap,
             "quota_hints": quota_hints.get(t.id, {}),
             "cost": t.cost,
+            "live_quota": lq_tiers.get(t.id, _default_live_quota(t.id)),
         })
     return {
         "config_version": cfg.version,
         "config_source": config_source,
         "tiers": tiers,
+        "poller": (live_quota or {}).get(
+            "poller", {"healthy": True, "last_run": None, "providers": {}}
+        ),
         "paid": {
             "enabled": cfg.paid.enabled,
             "spend_today_usd": spend_today_usd,

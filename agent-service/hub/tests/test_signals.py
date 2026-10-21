@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from hub.signals import (  # noqa: E402
     agy_auth_fault,
     agy_exhausted,
+    agy_family_of,
     agy_outcome,
     agy_unknown_model,
     http_outcome,
@@ -116,3 +117,43 @@ def test_parse_quota_hints_extracts_only_rate_headers():
     assert hints["retry-after"] == "3"
     assert "authorization" not in hints
     assert "content-type" not in hints
+
+
+# --- AGY per-family mapping (live-quota Epic C, FR-3.1) ----------------------
+
+_AGY_CFG = {
+    "families": {
+        # specific-before-general: "gemini-4-argon" is Argon-class
+        "argon": {"label": "Gemini Argon-class", "match": ["argon"]},
+        "gemini": {"label": "Gemini Models", "match": ["gemini"]},
+        "claude_gpt": {"label": "Claude and GPT models", "match": ["claude", "gpt"]},
+    },
+    "family_markers": {
+        "claude_gpt": ["claude", "anthropic"],
+        "argon": ["argon"],
+    },
+}
+
+
+def test_agy_family_of_model_name():
+    assert agy_family_of("gemini-3.8-flash-high", "", _AGY_CFG) == "gemini"
+    assert agy_family_of("claude-sonnet-4.6", "", _AGY_CFG) == "claude_gpt"
+    assert agy_family_of("gpt-oss-120b", "", _AGY_CFG) == "claude_gpt"
+    assert agy_family_of("gemini-4-argon", "", _AGY_CFG) == "argon"
+
+
+def test_agy_family_of_probe_taxonomy_wins():
+    tax = {"weird-model-x": "argon"}
+    assert agy_family_of("weird-model-x", "", _AGY_CFG, tax) == "argon"
+
+
+def test_agy_family_of_output_markers():
+    out = "Error: the claude model has exhausted its weekly quota (anthropic)"
+    assert agy_family_of("gemini-3.8-flash-high", out, _AGY_CFG, {}) == "gemini"
+    # model name unmatched -> markers decide
+    assert agy_family_of("unknown-model-1", out, _AGY_CFG, {}) == "claude_gpt"
+
+
+def test_agy_family_of_no_match_is_none():
+    assert agy_family_of("mystery-model", "some generic error", _AGY_CFG, {}) is None
+    assert agy_family_of("", "", {}, {}) is None

@@ -150,5 +150,53 @@
   "global": {
     "max_input_chars": 200000,
     "config_ttl_s": 60
+  },
+  "_comment_quota": "Live-quota (Epic C): hot-loaded, no redeploy needed. pb_field_roles stays null until the build-time Cloud Run capture confirms the protobuf field mapping (C-S7); until then the probe degrades honestly to estimated.",
+  "quota": {
+    "staleness_s": 1800,
+    "poller_interval_s": 600,
+    "probe_interval_s": 600,
+    "probe_initial_delay_s": 60,
+    "family_breaker": {
+      "exhaustions_to_open": 3,
+      "window_s": 600,
+      "cooldown_s": 900
+    },
+    "providers": {
+      "agy": {
+        "probe_enabled": true,
+        "pb_field_roles": null,
+        "families": {
+          "argon": {
+            "label": "Gemini Argon-class",
+            "match": [
+              "argon"
+            ]
+          },
+          "gemini": {
+            "label": "Gemini Models",
+            "match": [
+              "gemini"
+            ]
+          },
+          "claude_gpt": {
+            "label": "Claude and GPT models",
+            "match": [
+              "claude",
+              "gpt"
+            ]
+          }
+        },
+        "family_markers": {
+          "claude_gpt": [
+            "claude",
+            "anthropic"
+          ],
+          "argon": [
+            "argon"
+          ]
+        }
+      }
+    }
   }
 }

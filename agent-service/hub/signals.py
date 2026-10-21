@@ -86,6 +86,46 @@ def agy_outcome(return_code: int, output_text: str) -> AttemptOutcome:
 
 
 # ---------------------------------------------------------------------------
+# AGY per-model-family state (live-quota Epic C, FR-3.1)
+# ---------------------------------------------------------------------------
+
+def agy_family_of(
+    model_name: str,
+    output_text: str,
+    agy_cfg: dict,
+    model_to_family: Optional[dict] = None,
+) -> Optional[str]:
+    """Maps a failed agy attempt to a quota family id.
+
+    Order: (1) explicit probe taxonomy map (model -> family, authoritative for
+    which models exist); (2) config-order substring match on the model name;
+    (3) family marker strings in the CLI output (for family-specific error
+    text). Returns None when nothing matches — the caller then falls back to
+    legacy whole-tier behavior (FR-3.3), never a crash.
+
+    ``agy_cfg`` is the ``quota.providers.agy`` config block
+    ({"families": {id: {"label", "match": [...]}}, "family_markers": {...}}).
+    """
+    ml = (model_name or "").lower()
+    if model_to_family:
+        lowered = {str(k).lower(): v for k, v in model_to_family.items()}
+        if ml in lowered:
+            return lowered[ml]
+    families = (agy_cfg or {}).get("families", {})
+    for fam_id, rule in families.items():
+        for sub in rule.get("match", []):
+            if str(sub).lower() in ml:
+                return fam_id
+    out = (output_text or "").lower()
+    markers = (agy_cfg or {}).get("family_markers", {})
+    for fam_id, subs in markers.items():
+        for sub in subs or []:
+            if str(sub).lower() in out:
+                return fam_id
+    return None
+
+
+# ---------------------------------------------------------------------------
 # HTTP API tiers (429 = universal exhaustion signal)
 # ---------------------------------------------------------------------------
 

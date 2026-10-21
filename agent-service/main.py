@@ -11,6 +11,7 @@ import io
 import zipfile
 import sqlite3
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from pathlib import Path
 import pty
 import termios
@@ -137,6 +138,27 @@ TOOLS_LOCK = asyncio.Lock()
 
 # Model Hub singleton: one router owns the priority ladder for every entry point (AD-1)
 model_hub = ModelHub()
+
+
+@asynccontextmanager
+async def _hub_lifespan(app: FastAPI):
+    """Starts the supervised live-quota poller/probe (live-quota Epic C, AD-11).
+
+    The poller runs the AGY CLI probe on a background task only — chat
+    requests never wait on it. Graceful shutdown cancels the task.
+    """
+    from hub.quota_poller import start as start_quota_poller
+
+    stop_poller = start_quota_poller(model_hub)
+    try:
+        yield
+    finally:
+        await stop_poller()
+
+
+# The app object is constructed above (line ~40), before the hub singleton
+# exists; attach the lifespan context here where both are in scope.
+app.router.lifespan_context = _hub_lifespan
 
 
 class ChatCommand(BaseModel):
@@ -888,7 +910,9 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
 @app.websocket("/terminal/ws")
 async def websocket_terminal(websocket: WebSocket, repo: str = "cloud-agy-orchestrator", token: str = None, conversation_id: str = None):
     """Direct interactive WebSocket terminal hooked to an authentic Cloud Run PTY session."""
-    if WEBHOOK_SECRET and token and token not in (WEBHOOK_SECRET, "agy-public-client"):
+    # Hardened: a missing token must NOT short-circuit to accepted (was: anonymous
+    # WebSocket shell on the public container). The PWA always sends a token.
+    if token not in (WEBHOOK_SECRET, "agy-public-client"):
         await websocket.close(code=1008)
         return
     await websocket.accept()

@@ -74,6 +74,31 @@ class GlobalSettings(BaseModel):
     config_ttl_s: int = 60
 
 
+class QuotaProviderSettings(BaseModel):
+    """Per-provider live-quota knobs (live-quota Epic C; extra keys ignored)."""
+
+    model_config = ConfigDict(extra="ignore")
+    quota_enabled: bool = True
+    probe_enabled: bool = True
+    harvest_enabled: bool = True
+    accounting_enabled: bool = True
+    pb_field_roles: Optional[dict[str, int]] = None
+    families: dict[str, dict] = Field(default_factory=dict)
+    family_markers: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class QuotaSettings(BaseModel):
+    """Live-quota subsystem config (hot-loaded, AD-4)."""
+
+    model_config = ConfigDict(extra="ignore")
+    staleness_s: int = 1800
+    poller_interval_s: int = 600
+    probe_interval_s: int = 600
+    probe_initial_delay_s: int = 60
+    family_breaker: BreakerSettings = Field(default_factory=BreakerSettings)
+    providers: dict[str, QuotaProviderSettings] = Field(default_factory=dict)
+
+
 class HubConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
     version: int = 1
@@ -82,6 +107,7 @@ class HubConfig(BaseModel):
     tiers: list[TierConfig] = Field(default_factory=list)
     breaker: BreakerSettings = Field(default_factory=BreakerSettings)
     global_: GlobalSettings = Field(default_factory=GlobalSettings, alias="global")
+    quota: QuotaSettings = Field(default_factory=QuotaSettings)
 
     def tiers_sorted(self) -> list[TierConfig]:
         return sorted(self.tiers, key=lambda t: t.order)
