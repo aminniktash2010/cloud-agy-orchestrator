@@ -245,7 +245,8 @@ class ConfigLoader:
         try:
             data = json.loads(raw)
             cfg = HubConfig.model_validate(data)
-            return ConfigLoader._validate_catalog(cfg)
+            cfg = ConfigLoader._validate_catalog(cfg)
+            return ConfigLoader._validate_hygiene(cfg)
         except Exception as e:
             logger.error(
                 "Invalid MODEL_HUB_CONFIG from %s (%s); failing closed to DEFAULT_LADDER",
@@ -277,6 +278,25 @@ class ConfigLoader:
                         tier_id, canonical,
                     )
                     del entry.carriers[tier_id]
+        return cfg
+
+    @staticmethod
+    def _validate_hygiene(cfg: HubConfig) -> HubConfig:
+        """Fail-soft: out-of-range hygiene knobs reset to defaults with a
+        warning (AD-41/AD-45). A config typo never crashes the ladder."""
+        h = cfg.model_hygiene
+        if h.quarantine_ttl_s <= 0:
+            logger.warning(
+                "model_hygiene.quarantine_ttl_s must be positive (got %r); using 86400",
+                h.quarantine_ttl_s,
+            )
+            h.quarantine_ttl_s = 86400
+        if h.poll_interval_s <= 0:
+            logger.warning(
+                "model_hygiene.poll_interval_s must be positive (got %r); using 21600",
+                h.poll_interval_s,
+            )
+            h.poll_interval_s = 21600
         return cfg
 
 

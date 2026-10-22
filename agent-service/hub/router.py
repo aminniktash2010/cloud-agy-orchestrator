@@ -32,7 +32,7 @@ from hub.observability import (
     status_payload,
 )
 from hub.quota import QuotaTracker, SpendLedger, truncate_prompt
-from hub.signals import agy_family_of, parse_retry_after
+from hub.signals import agy_family_of, is_retired_model, parse_retry_after
 from hub.types import (
     AdapterResponse,
     AttemptOutcome,
@@ -74,6 +74,11 @@ class ModelHub:
         self._live_quota = LiveQuotaStore()
         # Stale catalog mappings: (canonical_model, tier_id) -> (provider_model_id, first_seen_iso)
         self._stale_mappings: dict[tuple[str, str], tuple[str, str]] = {}
+        # Retired-model quarantine (model-hygiene Epic H1, AD-41):
+        # (tier_id, model_id) -> {"first_seen", "last_seen", "hits",
+        #                          "signal_excerpt", "source"}.
+        # In-memory only; a restart re-detects at the cost of one failed call.
+        self._retired_models: dict[tuple[str, str], dict] = {}
 
     @property
     def live_quota(self) -> LiveQuotaStore:
@@ -211,6 +216,81 @@ class ModelHub:
             logger.warning("model_catalog: stale mapping for '%s' on tier '%s' (mapped id '%s')",
                            canonical, tier_id, provider_id)
 
+    # ------------------------------------------------------------------
+    # Retired-model hygiene (Epic H1, AD-41/AD-42)
+    # ------------------------------------------------------------------
+    def _hygiene_cfg(self) -> dict:
+        """The model_hygiene config block as a plain dict (fail-soft defaults)."""
+        h = self._config().model_hygiene
+        return {
+            "enabled": bool(getattr(h, "enabled", True)),
+            "quarantine_ttl_s": int(getattr(h, "quarantine_ttl_s", 86400) or 86400),
+        }
+
+    def _quarantine(self, tier_id: str, model_id: str,
+                    signal_excerpt: str, source: str = "reactive") -> None:
+        """Records a retirement verdict for (tier_id, model_id).
+
+        New entries start at hits=1; repeat signals refresh last_seen/hits.
+        A reactive (real-call) verdict outranks a proactive (poller-diff)
+        one and is never downgraded (AD-45).
+        """
+        if not self._hygiene_cfg()["enabled"]:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        key = (tier_id, model_id)
+        e = self._retired_models.get(key)
+        if e is None:
+            self._retired_models[key] = {
+                "first_seen": now, "last_seen": now, "hits": 1,
+                "signal_excerpt": (signal_excerpt or "")[:200], "source": source,
+            }
+            logger.warning("model hygiene: quarantined '%s' on tier '%s' (%s)",
+                           model_id, tier_id, source)
+        else:
+            e["hits"] += 1
+            e["last_seen"] = now
+            if source == "reactive":
+                e["source"] = "reactive"  # real call outranks poller diff
+            if signal_excerpt:
+                e["signal_excerpt"] = signal_excerpt[:200]
+
+    def _is_quarantined(self, tier_id: str, model_id: str) -> bool:
+        """True while the (tier, model) verdict is fresh. TTL expiry permits
+        exactly one re-probe; the recording branch then clears or refreshes."""
+        if not self._hygiene_cfg()["enabled"]:
+            return False
+        e = self._retired_models.get((tier_id, model_id))
+        if not e:
+            return False
+        ttl = self._hygiene_cfg()["quarantine_ttl_s"]
+        try:
+            last = datetime.fromisoformat(e["last_seen"])
+        except (TypeError, ValueError):
+            return False
+        return (datetime.now(timezone.utc) - last).total_seconds() < ttl
+
+    def _clear_quarantine(self, tier_id: str, model_id: str) -> None:
+        """Drops the quarantine entry: a TTL-expired re-probe healed (any
+        non-retired outcome), or the operator fixed the config."""
+        if (tier_id, model_id) in self._retired_models:
+            del self._retired_models[(tier_id, model_id)]
+            logger.info("model hygiene: cleared quarantine for '%s' on tier '%s'",
+                        model_id, tier_id)
+
+    @staticmethod
+    def _quarantine_referenced(tier_id: str, model_id: str, cfg: HubConfig) -> bool:
+        """True while the operator's config still references (tier, model_id):
+        the tier's own `models` list or any model_catalog carrier mapping."""
+        tier = cfg.get_tier(tier_id)
+        if tier is not None and model_id in (tier.models or []):
+            return True
+        catalog = cfg.model_catalog.models if cfg.model_catalog else {}
+        for entry in catalog.values():
+            if entry.carriers.get(tier_id) == model_id:
+                return True
+        return False
+
     def _pin_error_result(self, err: PinError, request: HubRequest) -> HubResult:
         """no_match: zero provider calls were made; the input never resolved."""
         return HubResult(
@@ -273,6 +353,13 @@ class ModelHub:
                           else "skip: model_not_carried")
                 self._record(attempts, tier, "", "skipped", reason)
                 continue
+            # AD-41: a dead id stays dead regardless of skips — consult the
+            # quarantine immediately after the carrier lookup, before any
+            # provider call (zero calls burned on a hit).
+            if self._is_quarantined(tier.id, provider_id):
+                self._record(attempts, tier, provider_id, "skipped",
+                             "skip: model_quarantined")
+                continue
             if tier.id in (request.skip_tiers or []):
                 self._record(attempts, tier, "", "skipped", "skip: skip_tiers")
                 continue
@@ -334,6 +421,8 @@ class ModelHub:
 
                 if outcome == AttemptOutcome.SUCCESS:
                     self._note_family_result(tier, model, AttemptOutcome.SUCCESS, "")
+                    # A TTL-expired re-probe healed: drop the quarantine entry.
+                    self._clear_quarantine(tier.id, model)
                     self._record(attempts, tier, model, outcome.value, "",
                                  latency_ms,
                                  usage=resp.usage if isinstance(resp, AdapterResponse) else {},
@@ -363,36 +452,47 @@ class ModelHub:
                         outcome = AttemptOutcome.EXHAUSTED
 
                 reason = self._answer_text(resp)[:300]
+                scode, sbody = self._retirement_signal(resp)
                 if outcome == AttemptOutcome.EXHAUSTED:
                     self._note_family_result(tier, model, outcome, reason)
+                    # Non-retired outcome: a TTL-expired re-probe heals.
+                    self._clear_quarantine(tier.id, model)
                     self._record(attempts, tier, model, outcome.value, reason, latency_ms)
                     break  # next carrier
                 if outcome == AttemptOutcome.UNKNOWN_MODEL:
                     # Under a pin the id came from our catalog: the mapping is stale.
                     self._note_stale(pin.canonical, tier.id, model)
+                    # AD-43: the physical id is dead regardless of the mapping.
+                    self._quarantine(tier.id, model, sbody, source="reactive")
                     self._record(attempts, tier, model, "stale_mapping",
                                  f"stale mapping: provider rejected mapped id '{model}': {reason}",
                                  latency_ms)
                     break  # next carrier (no intra-tier walk under pin)
                 if outcome == AttemptOutcome.TRANSIENT:
-                    if "404" in reason:
-                        # AD-32: 404 on a catalog-mapped id = stale mapping (http_outcome untouched).
+                    if is_retired_model(scode, sbody, tier.provider):
+                        # AD-32/AD-43: retired id on a catalog mapping = stale
+                        # mapping AND a dead physical id (http_outcome untouched).
                         self._note_stale(pin.canonical, tier.id, model)
+                        self._quarantine(tier.id, model, sbody, source="reactive")
                         self._record(attempts, tier, model, "stale_mapping",
-                                     f"stale mapping: 404 for mapped id '{model}': {reason}",
+                                     f"stale mapping: retired id '{model}': {reason}",
                                      latency_ms)
                     else:
+                        self._clear_quarantine(tier.id, model)
                         self._record(attempts, tier, model, outcome.value, reason, latency_ms)
                     break  # next carrier
                 if outcome == AttemptOutcome.AUTH_FAULT:
                     if tier.optional:
                         logger.warning("tier '%s' auth fault (optional) — skipping tier", tier.id)
+                        # Non-retired outcome: a TTL-expired re-probe heals.
+                        self._clear_quarantine(tier.id, model)
                         self._record(attempts, tier, model, outcome.value, reason, latency_ms)
                         break
                     raise HubError(f"auth fault on required tier '{tier.id}': {reason}")
                 if outcome == AttemptOutcome.BAD_REQUEST:
                     if request.repo_ctx is None:
                         logger.info("tier '%s' BAD_REQUEST without repo_ctx — skipping tier", tier.id)
+                        self._clear_quarantine(tier.id, model)
                         self._record(attempts, tier, model, "skipped", "skip: no_repo_ctx", latency_ms)
                         break
                     raise HubError(f"bad request on tier '{tier.id}' model '{model}': {reason}")
@@ -418,6 +518,12 @@ class ModelHub:
                 reason = ("skip: model_pinned_non_agy" if tier.id == "agy"
                           else "skip: model_not_carried")
                 self._record(attempts, tier, "", "skipped", reason)
+                continue
+            # AD-41: a dead id stays dead regardless of skips — consult the
+            # quarantine immediately after the carrier lookup.
+            if self._is_quarantined(tier.id, provider_id):
+                self._record(attempts, tier, provider_id, "skipped",
+                             "skip: model_quarantined")
                 continue
             if tier.id in (request.skip_tiers or []):
                 self._record(attempts, tier, "", "skipped", "skip: skip_tiers")
@@ -518,6 +624,8 @@ class ModelHub:
 
                 if outcome == AttemptOutcome.SUCCESS:
                     self._note_family_result(tier, model, AttemptOutcome.SUCCESS, "")
+                    # A TTL-expired re-probe healed: drop the quarantine entry.
+                    self._clear_quarantine(tier.id, model)
                     usage = resp.usage if isinstance(resp, AdapterResponse) else {}
                     self._record(attempts, tier, model, outcome.value, "", latency_ms,
                                  usage=usage, quota_hints=quota_hints)
@@ -535,29 +643,40 @@ class ModelHub:
                     return
 
                 reason = self._answer_text(resp)[:300]
+                scode, sbody = self._retirement_signal(resp)
                 if outcome == AttemptOutcome.EXHAUSTED:
                     self._note_family_result(tier, model, outcome, reason)
+                    # Non-retired outcome: a TTL-expired re-probe heals.
+                    self._clear_quarantine(tier.id, model)
                     self._record(attempts, tier, model, outcome.value, reason, latency_ms)
                     break
                 if outcome == AttemptOutcome.UNKNOWN_MODEL:
                     # No intra-tier switch message under a pin (suppressed by design).
                     self._note_stale(pin.canonical, tier.id, model)
+                    # AD-43: the physical id is dead regardless of the mapping.
+                    self._quarantine(tier.id, model, sbody, source="reactive")
                     self._record(attempts, tier, model, "stale_mapping",
                                  f"stale mapping: provider rejected mapped id '{model}': {reason}",
                                  latency_ms)
                     break
                 if outcome == AttemptOutcome.TRANSIENT:
-                    if "404" in reason:
+                    if is_retired_model(scode, sbody, tier.provider):
+                        # AD-32/AD-43: retired id on a catalog mapping = stale
+                        # mapping AND a dead physical id (http_outcome untouched).
                         self._note_stale(pin.canonical, tier.id, model)
+                        self._quarantine(tier.id, model, sbody, source="reactive")
                         self._record(attempts, tier, model, "stale_mapping",
-                                     f"stale mapping: 404 for mapped id '{model}': {reason}",
+                                     f"stale mapping: retired id '{model}': {reason}",
                                      latency_ms)
                     else:
+                        self._clear_quarantine(tier.id, model)
                         self._record(attempts, tier, model, outcome.value, reason, latency_ms)
                     break
                 if outcome == AttemptOutcome.AUTH_FAULT:
                     if tier.optional:
                         logger.warning("tier '%s' auth fault (optional) — skipping tier", tier.id)
+                        # Non-retired outcome: a TTL-expired re-probe heals.
+                        self._clear_quarantine(tier.id, model)
                         self._record(attempts, tier, model, outcome.value, reason, latency_ms)
                         break
                     yield HubEvent(kind="error", payload=f"auth fault on required tier '{tier.id}': {reason}")
@@ -565,6 +684,7 @@ class ModelHub:
                 if outcome == AttemptOutcome.BAD_REQUEST:
                     if request.repo_ctx is None:
                         logger.info("tier '%s' BAD_REQUEST without repo_ctx — skipping tier", tier.id)
+                        self._clear_quarantine(tier.id, model)
                         self._record(attempts, tier, model, "skipped", "skip: no_repo_ctx", latency_ms)
                         break
                     yield HubEvent(kind="error", payload=f"bad request on tier '{tier.id}' model '{model}': {reason}")
@@ -652,8 +772,24 @@ class ModelHub:
         if isinstance(resp, AdapterResponse):
             return resp.text
         if isinstance(resp, dict):
+            if "status_code" in resp:
+                # AD-40 envelope: {"status_code": int, "body": str} — renders
+                # the body identically to the pre-envelope bare string.
+                return str(resp.get("body", ""))
             return str(resp.get("detail", resp.get("body", resp)))
         return str(resp)
+
+    @staticmethod
+    def _retirement_signal(resp: Any) -> tuple[int | None, str]:
+        """Extracts (status_code, body) for retirement sniffing (AD-40).
+
+        Only the AD-40 dict envelope carries a status; every other shape
+        (AdapterResponse, bare strings, retry dicts) yields (None, text) and
+        `is_retired_model` correctly refuses to judge.
+        """
+        if isinstance(resp, dict) and "status_code" in resp:
+            return resp.get("status_code"), str(resp.get("body", ""))
+        return None, ModelHub._answer_text(resp)
 
     # ------------------------------------------------------------------
     # /hub/status support (no secrets, ever)
@@ -712,6 +848,27 @@ class ModelHub:
                     "first_seen": first_seen,
                 })
         payload["stale_model_mappings"] = stale
+        # AD-44: retired-model quarantine. Entries auto-clear when the
+        # operator's config no longer references the id (tier `models` list
+        # or any model_catalog carrier mapping) — the 60s hot-load picks up
+        # the fix and the next status build confirms it, no restart.
+        retired: list[dict] = []
+        for (tier_id, model_id), e in list(self._retired_models.items()):
+            if not self._quarantine_referenced(tier_id, model_id, cfg):
+                del self._retired_models[(tier_id, model_id)]
+                logger.info("model hygiene: pruned retired entry for '%s' on tier '%s' "
+                            "(no longer referenced by config)", model_id, tier_id)
+                continue
+            retired.append({
+                "tier": tier_id,
+                "model_id": model_id,
+                "first_seen": e["first_seen"],
+                "last_seen": e["last_seen"],
+                "hits": e["hits"],
+                "signal_excerpt": e["signal_excerpt"],
+                "source": e["source"],
+            })
+        payload["retired_models"] = retired
         return payload
 
     # ------------------------------------------------------------------
@@ -772,6 +929,13 @@ class ModelHub:
 
             tier_had_attempts = False
             for family_id, model in model_pairs:
+                # AD-41: quarantine consult BEFORE any provider call and before
+                # tier_had_attempts — a quarantined id burns zero calls and
+                # never touches the tier breaker (AD-42).
+                if self._is_quarantined(tier.id, model):
+                    self._record(attempts, tier, model, "skipped",
+                                 "skip: model_quarantined")
+                    continue
                 tier_had_attempts = True
                 started = time.monotonic()
                 if force_exhaust == tier.id:
@@ -801,6 +965,8 @@ class ModelHub:
                     assert self._breaker is not None
                     self._breaker.note_success(tier.id)
                     self._note_family_result(tier, model, AttemptOutcome.SUCCESS, "")
+                    # A TTL-expired re-probe healed: drop the quarantine entry.
+                    self._clear_quarantine(tier.id, model)
                     self._record(attempts, tier, model, outcome.value, "",
                                  latency_ms,
                                  usage=resp.usage if isinstance(resp, AdapterResponse) else {},
@@ -828,6 +994,18 @@ class ModelHub:
                         outcome = AttemptOutcome.EXHAUSTED
 
                 reason = self._answer_text(resp)[:300]
+                scode, sbody = self._retirement_signal(resp)
+                if outcome == AttemptOutcome.UNKNOWN_MODEL:
+                    # AD-43: the hygiene layer treats UNKNOWN_MODEL as a
+                    # retirement signal (CLI markers are the signal here;
+                    # is_retired_model correctly refuses None statuses).
+                    self._quarantine(tier.id, model, sbody, source="reactive")
+                elif (outcome == AttemptOutcome.TRANSIENT
+                      and is_retired_model(scode, sbody, tier.provider)):
+                    self._quarantine(tier.id, model, sbody, source="reactive")
+                else:
+                    # Any non-retired outcome: a TTL-expired re-probe heals.
+                    self._clear_quarantine(tier.id, model)
                 self._record(attempts, tier, model, outcome.value, reason, latency_ms)
 
                 if outcome == AttemptOutcome.EXHAUSTED:
@@ -984,6 +1162,13 @@ class ModelHub:
             tier_had_attempts = False
             live = tier.capability == CapabilityMode.AGENT_LOOP  # forward live, else buffer
             for pi, (family_id, model) in enumerate(model_pairs):
+                # AD-41: quarantine consult BEFORE any provider call and before
+                # tier_had_attempts — a quarantined id burns zero calls and
+                # never touches the tier breaker (AD-42).
+                if self._is_quarantined(tier.id, model):
+                    self._record(attempts, tier, model, "skipped",
+                                 "skip: model_quarantined")
+                    continue
                 tier_had_attempts = True
                 started = time.monotonic()
                 buffered: list[HubEvent] = []
@@ -1043,6 +1228,8 @@ class ModelHub:
                     assert self._breaker is not None
                     self._breaker.note_success(tier.id)
                     self._note_family_result(tier, model, AttemptOutcome.SUCCESS, "")
+                    # A TTL-expired re-probe healed: drop the quarantine entry.
+                    self._clear_quarantine(tier.id, model)
                     usage = resp.usage if isinstance(resp, AdapterResponse) else {}
                     self._record(attempts, tier, model, outcome.value, "", latency_ms,
                                  usage=usage, quota_hints=quota_hints)
@@ -1060,6 +1247,17 @@ class ModelHub:
                     return
 
                 reason = self._answer_text(resp)[:300]
+                scode, sbody = self._retirement_signal(resp)
+                if outcome == AttemptOutcome.UNKNOWN_MODEL:
+                    # AD-43: the hygiene layer treats UNKNOWN_MODEL as a
+                    # retirement signal (CLI markers are the signal here).
+                    self._quarantine(tier.id, model, sbody, source="reactive")
+                elif (outcome == AttemptOutcome.TRANSIENT
+                      and is_retired_model(scode, sbody, tier.provider)):
+                    self._quarantine(tier.id, model, sbody, source="reactive")
+                else:
+                    # Any non-retired outcome: a TTL-expired re-probe heals.
+                    self._clear_quarantine(tier.id, model)
                 self._record(attempts, tier, model, outcome.value, reason, latency_ms)
 
                 if outcome == AttemptOutcome.EXHAUSTED:

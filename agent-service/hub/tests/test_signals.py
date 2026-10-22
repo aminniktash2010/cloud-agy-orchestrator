@@ -12,6 +12,7 @@ from hub.signals import (  # noqa: E402
     agy_outcome,
     agy_unknown_model,
     http_outcome,
+    is_retired_model,
     parse_quota_hints,
     parse_retry_after,
 )
@@ -157,3 +158,51 @@ def test_agy_family_of_output_markers():
 def test_agy_family_of_no_match_is_none():
     assert agy_family_of("mystery-model", "some generic error", _AGY_CFG, {}) is None
     assert agy_family_of("", "", {}, {}) is None
+
+
+# --- is_retired_model (model-hygiene Epic H1, AD-39) ---------------------------
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("status_code,body,expected", [
+    # Verified live shapes (§3.2 fixtures)
+    (404, '{"error": {"code": 404, "message": "models/gemini-2.5-flash is no '
+            'longer available to new users", "status": "NOT_FOUND"}}', True),
+    (404, '{"error": {"code": "model_not_found", "message": "The model `x` '
+            'does not exist"}}', True),
+    # Each marker individually
+    (404, "NOT_FOUND", True),
+    (404, "not found", True),
+    (404, "no longer available", True),
+    (404, "does not exist", True),
+    (404, "no such model", True),
+    (404, "unknown model", True),
+    (404, "invalid model", True),
+    (404, "unsupported model", True),
+    (404, "is not found for API version v1beta", True),
+    (404, "is not supported for generateContent", True),
+    (404, "model_not_found", True),
+    # Case-insensitivity
+    (404, "MODEL_NOT_FOUND", True),
+    (404, "No Longer Available To New Users", True),
+    # Excluded classes
+    (404, "<html><body>Error 404</body></html>", False),  # bare 404, no markers
+    (404, "", False),                                      # empty body
+    (400, '{"error": {"code": "model_not_found"}}', False),
+    (401, '{"error": {"code": "model_not_found"}}', False),
+    (403, '{"error": {"code": "model_not_found"}}', False),
+    (429, '{"error": {"code": "model_not_found"}}', False),
+    (500, '{"error": {"code": "model_not_found"}}', False),
+    (503, '{"error": {"code": "model_not_found"}}', False),
+    (None, '{"error": {"code": "model_not_found"}}', False),  # unknown status
+    (200, '{"error": {"code": "model_not_found"}}', False),
+])
+def test_is_retired_model(status_code, body, expected):
+    assert is_retired_model(status_code, body) is expected
+
+
+def test_is_retired_model_provider_kwarg_accepted():
+    # provider is accepted for future tuning; v1 ignores it.
+    assert is_retired_model(404, "model_not_found", provider="groq") is True
+    assert is_retired_model(404, "nothing here", provider="groq") is False
