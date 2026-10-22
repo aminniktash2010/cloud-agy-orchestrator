@@ -166,10 +166,14 @@ class ChatCommand(BaseModel):
     repo: str
     prompt: str
     branch: str = "main"
-    model: str = "gemini-3.8-flash-high"
+    # "auto" = unpinned ladder (the default). Any other value is a strict
+    # cross-tier model pin (AD-29). (Was "gemini-3.8-flash-high", which only
+    # ever re-ordered tier 0's first attempt — effectively the ladder anyway.)
+    model: str = "auto"
     use_feature_branch: bool = False
     conversation_id: Optional[str] = None
     continue_session: bool = True
+    allow_model_fallback: bool = False  # loud substitution when no carrier serves a pinned model
 
 
 async def ensure_cached_tools():
@@ -657,7 +661,9 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
                 has_active_session = True
 
             # Execute via the Model Hub: priority ladder with automatic failover (AD-1).
-            # The legacy ChatCommand.model pins the first Tier-0 model; "auto" uses the config ladder.
+            # ChatCommand.model: "auto"/""/"default" = unpinned ladder; any other
+            # value is a strict cross-tier model pin (AD-29). The legacy
+            # requested_model_override is retired (kept in the type only).
             hub_request = HubRequest(
                 prompt=cmd.prompt,
                 repo=cmd.repo,
@@ -672,11 +678,12 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
                     target_branch=target_branch,
                     cache_tier=cache_tier,
                 ),
-                requested_model_override=(
+                model=(
                     None
                     if (cmd.model or "auto").strip().lower() in ("auto", "", "default")
                     else cmd.model.strip()
                 ),
+                allow_model_fallback=cmd.allow_model_fallback,
             )
             result = await model_hub.execute(hub_request)
 
@@ -687,6 +694,19 @@ async def execute_agent_task(cmd: ChatCommand, x_webhook_token: str = Header(Non
                     detail={
                         "error": "ladder_empty",
                         "message": "All model-hub tiers exhausted or unavailable.",
+                        "attempts": [a.model_dump() for a in result.failover_attempts],
+                    },
+                )
+
+            if result.status == "model_unavailable":
+                # AD-34: 400 = unknown model name (client error); 422 = well-formed
+                # pin no carrier could serve. Never confused with ladder_empty (429).
+                code = (result.model_error or {}).get("code", "no_carrier")
+                raise HTTPException(
+                    status_code=400 if code == "no_match" else 422,
+                    detail={
+                        "error": "model_unavailable",
+                        **(result.model_error or {}),
                         "attempts": [a.model_dump() for a in result.failover_attempts],
                     },
                 )
@@ -803,11 +823,12 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
                         target_branch=target_branch,
                         cache_tier=cache_tier,
                     ),
-                    requested_model_override=(
+                    model=(
                         None
                         if (cmd.model or "auto").strip().lower() in ("auto", "", "default")
                         else cmd.model.strip()
                     ),
+                    allow_model_fallback=cmd.allow_model_fallback,
                 )
 
                 final_result: HubResult | None = None
@@ -847,6 +868,16 @@ async def execute_agent_task_stream(cmd: ChatCommand, x_webhook_token: str = Hea
                         "status": "ladder_empty",
                         "error": "ladder_empty",
                         "message": "All model-hub tiers exhausted or unavailable.",
+                        "attempts": [a.model_dump() for a in final_result.failover_attempts],
+                    })
+                    return
+
+                if final_result.status == "model_unavailable":
+                    # AD-34: mirrors the collect handler's 400/422 mapping.
+                    yield sse_event("done", {
+                        "status": "model_unavailable",
+                        "error": "model_unavailable",
+                        **(final_result.model_error or {}),
                         "attempts": [a.model_dump() for a in final_result.failover_attempts],
                     })
                     return

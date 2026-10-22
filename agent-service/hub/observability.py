@@ -23,10 +23,13 @@ def log_attempt(attempt: ModelAttempt) -> None:
     )
 
 
-def advisory_banner(provider: str, model: str) -> str:
+def advisory_banner(provider: str, model: str, pinned: str | None = None) -> str:
     """Fixed advisory-mode copy shown whenever an answer_only tier serves (FR-3.2)."""
+    what = f"{provider} ({model})"
+    if pinned:
+        what = f"{provider} ({model}) — pinned model {pinned}"
     return (
-        f"🤖 Advisory answer — AGY credits exhausted; served by {provider} ({model}). "
+        f"🤖 Advisory answer — AGY credits exhausted; served by {what}. "
         "No code was changed."
     )
 
@@ -35,6 +38,11 @@ def serving_line(result: HubResult) -> str:
     """Gmail bridge one-liner (PRD Q5): appended to the bridge reply."""
     mode = "advisory" if result.capability_mode == "answer_only" else "agent"
     n = len(result.failover_attempts)
+    if result.pinned_model:
+        return (
+            f"🤖 Pinned {result.pinned_model} via {result.provider} ({result.model}) — {mode} mode "
+            f"· {n} tier(s) tried"
+        )
     return (
         f"🤖 Served by {result.provider} ({result.model}) — {mode} mode "
         f"· {n} tier(s) tried"

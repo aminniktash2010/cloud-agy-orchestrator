@@ -104,6 +104,18 @@ class QuotaSettings(BaseModel):
     providers: dict[str, QuotaProviderSettings] = Field(default_factory=dict)
 
 
+class ModelCarrierMap(BaseModel):
+    """One canonical model: aliases + per-tier provider model ids (operator data)."""
+    model_config = ConfigDict(extra="ignore")  # tolerate _comment keys in JSON
+    aliases: list[str] = Field(default_factory=list)
+    carriers: dict[str, str] = Field(default_factory=dict)  # tier_id -> provider model id
+
+
+class ModelCatalogConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    models: dict[str, ModelCarrierMap] = Field(default_factory=dict)
+
+
 class HubConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
     version: int = 1
@@ -113,6 +125,7 @@ class HubConfig(BaseModel):
     breaker: BreakerSettings = Field(default_factory=BreakerSettings)
     global_: GlobalSettings = Field(default_factory=GlobalSettings, alias="global")
     quota: QuotaSettings = Field(default_factory=QuotaSettings)
+    model_catalog: ModelCatalogConfig = Field(default_factory=ModelCatalogConfig)
 
     def tiers_sorted(self) -> list[TierConfig]:
         return sorted(self.tiers, key=lambda t: t.order)
@@ -155,6 +168,8 @@ class HubRequest(BaseModel):
     repo_ctx: Optional[RepoContext] = None
     requested_model_override: Optional[str] = None  # pins first Tier-0 model (legacy ChatCommand.model)
     skip_tiers: list[str] = Field(default_factory=list)  # tier IDs the router must never attempt (MCP hub_ask defaults to ["agy"])
+    model: Optional[str] = None  # free-text model pin; None/""/"auto"/"default" = unpinned (today's ladder)
+    allow_model_fallback: bool = False  # loud substitution: serve a different model when no carrier serves the pin
 
 
 class ModelAttempt(BaseModel):
@@ -170,7 +185,7 @@ class ModelAttempt(BaseModel):
 
 
 class HubResult(BaseModel):
-    status: str  # "success" | "ladder_empty"
+    status: str  # "success" | "ladder_empty" | "model_unavailable"
     answer: str = ""
     tier_used: str = ""
     provider: str = ""
@@ -180,6 +195,10 @@ class HubResult(BaseModel):
     advisory_banner: str = ""
     serving_line: str = ""
     ladder_empty: bool = False
+    pinned_model: Optional[str] = None  # canonical model id when the request was pinned
+    requested_model: str = ""  # raw model text the caller asked for
+    model_substituted: bool = False  # True only via allow_model_fallback (loud, never silent)
+    model_error: Optional[dict] = None  # structured no_match / no_carrier payload
 
 
 class HubEvent(BaseModel):

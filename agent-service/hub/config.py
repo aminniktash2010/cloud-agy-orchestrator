@@ -244,7 +244,8 @@ class ConfigLoader:
     def _parse(raw: str, source: str) -> HubConfig:
         try:
             data = json.loads(raw)
-            return HubConfig.model_validate(data)
+            cfg = HubConfig.model_validate(data)
+            return ConfigLoader._validate_catalog(cfg)
         except Exception as e:
             logger.error(
                 "Invalid MODEL_HUB_CONFIG from %s (%s); failing closed to DEFAULT_LADDER",
@@ -252,6 +253,31 @@ class ConfigLoader:
                 e,
             )
             return HubConfig.model_validate(DEFAULT_LADDER)
+
+    @staticmethod
+    def _validate_catalog(cfg: HubConfig) -> HubConfig:
+        """Fail-soft: drop carriers pointing at unknown tiers or empty provider
+        ids (warning logged). A malformed catalog never crashes the ladder."""
+        catalog = cfg.model_catalog
+        if not catalog or not catalog.models:
+            return cfg
+        tier_ids = {t.id for t in cfg.tiers}
+        for canonical, entry in catalog.models.items():
+            for tier_id in list(entry.carriers.keys()):
+                provider_id = entry.carriers[tier_id]
+                if tier_id not in tier_ids:
+                    logger.warning(
+                        "model_catalog: dropping carrier for unknown tier '%s' (model '%s')",
+                        tier_id, canonical,
+                    )
+                    del entry.carriers[tier_id]
+                elif not (provider_id or "").strip():
+                    logger.warning(
+                        "model_catalog: dropping empty provider model id for tier '%s' (model '%s')",
+                        tier_id, canonical,
+                    )
+                    del entry.carriers[tier_id]
+        return cfg
 
 
 _loader = ConfigLoader()
