@@ -279,6 +279,11 @@ class ModelHub:
             logger.info("hub prompt truncated to %d chars", cfg.global_.max_input_chars)
 
         for tier in cfg.tiers_sorted():
+            # Structural tier skip (AD-22, e.g. MCP hub_ask default ["agy"]):
+            # checked BEFORE _skip_reason so the reason stays distinct.
+            if tier.id in (request.skip_tiers or []):
+                self._record(attempts, tier, "", "skipped", "skip: skip_tiers")
+                continue
             skip = self._skip_reason(tier, cfg)
             if skip:
                 self._record(attempts, tier, "", "skipped", f"skip: {skip}")
@@ -383,6 +388,13 @@ class ModelHub:
                         break
                     raise HubError(f"auth fault on required tier '{tier.id}': {reason}")
                 if outcome == AttemptOutcome.BAD_REQUEST:
+                    if request.repo_ctx is None:
+                        # Repo-less callers (MCP hub_ask) cannot satisfy adapters
+                        # that require a repo context (e.g. AgyAdapter): skip the
+                        # tier instead of failing the whole request.
+                        logger.info("tier '%s' BAD_REQUEST without repo_ctx — skipping tier", tier.id)
+                        self._record(attempts, tier, model, "skipped", "skip: no_repo_ctx", latency_ms)
+                        break
                     raise HubError(f"bad request on tier '{tier.id}' model '{model}': {reason}")
                 break
 
@@ -450,6 +462,11 @@ class ModelHub:
         prev_tier: TierConfig | None = None
 
         for tier in cfg.tiers_sorted():
+            # Structural tier skip (AD-22): checked BEFORE _skip_reason so the
+            # reason stays distinct in failover_attempts.
+            if tier.id in (request.skip_tiers or []):
+                self._record(attempts, tier, "", "skipped", "skip: skip_tiers")
+                continue
             skip = self._skip_reason(tier, cfg)
             if skip:
                 self._record(attempts, tier, "", "skipped", f"skip: {skip}")
@@ -590,6 +607,13 @@ class ModelHub:
                     yield HubEvent(kind="error", payload=f"auth fault on required tier '{tier.id}': {reason}")
                     return
                 if outcome == AttemptOutcome.BAD_REQUEST:
+                    if request.repo_ctx is None:
+                        # Repo-less callers (MCP hub_ask) cannot satisfy adapters
+                        # that require a repo context (e.g. AgyAdapter): skip the
+                        # tier instead of failing the whole request.
+                        logger.info("tier '%s' BAD_REQUEST without repo_ctx — skipping tier", tier.id)
+                        self._record(attempts, tier, model, "skipped", "skip: no_repo_ctx", latency_ms)
+                        break
                     yield HubEvent(kind="error", payload=f"bad request on tier '{tier.id}' model '{model}': {reason}")
                     return
                 break

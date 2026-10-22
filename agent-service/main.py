@@ -18,9 +18,9 @@ import termios
 import struct
 import fcntl
 from typing import Optional, Any
-from fastapi import FastAPI, HTTPException, Header, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Header, Request, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -30,6 +30,7 @@ from hub import observability as hub_observability
 from hub.router import HubError
 from hub.signals import agy_exhausted
 from hub.types import HubRequest, HubResult, RepoContext
+from hub.mcp_server import handle_mcp, require_mcp_token
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("agent-service")
@@ -597,6 +598,36 @@ async def hub_status(x_webhook_token: str = Header(None)):
     if x_webhook_token and WEBHOOK_SECRET and x_webhook_token not in (WEBHOOK_SECRET, "agy-public-client"):
         raise HTTPException(status_code=401, detail="Unauthorized webhook token")
     return model_hub.status()
+
+
+@app.post("/mcp")
+async def mcp_endpoint(request: Request):
+    """Model Hub MCP server (Epic M1): stateless JSON-RPC 2.0 over Streamable HTTP.
+
+    Tools: hub_ask (fallback-ladder answers, tier-0 skipped by default),
+    hub_status (secret-free ladder state). Bearer auth is enforced BEFORE any
+    MCP processing (AD-21).
+    """
+    if not os.environ.get("HUB_MCP_TOKEN", ""):
+        # Graceful degradation: the secret doesn't exist yet (Amin creates it).
+        # Fail closed with a clear operator signal, never crash.
+        return JSONResponse(
+            {"jsonrpc": "2.0", "id": None,
+             "error": {"code": -32603, "message": "MCP server not configured: HUB_MCP_TOKEN is not set"}},
+            status_code=503,
+        )
+    require_mcp_token(request.headers.get("authorization"))  # 401 before anything else
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}},
+            status_code=200,
+        )
+    status_code, resp_body = await handle_mcp(body, model_hub)
+    if resp_body is None:  # notification → HTTP 202, empty body
+        return Response(status_code=202)
+    return JSONResponse(resp_body, status_code=status_code)
 
 
 @app.post("/chat")
