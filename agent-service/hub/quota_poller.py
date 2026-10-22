@@ -162,6 +162,7 @@ async def _supervisor(model_hub) -> None:
     cfg = model_hub._config()
     q = cfg.quota
     await asyncio.sleep(q.probe_initial_delay_s + random.uniform(0, 15))
+    last_hygiene: datetime | None = None
     while True:
         for coro in (_probe_once(model_hub), _openrouter_poll_once(model_hub)):
             try:
@@ -170,6 +171,22 @@ async def _supervisor(model_hub) -> None:
                 await asyncio.wait_for(coro, timeout=180)
             except Exception:  # noqa: BLE001 - supervision boundary (NFR-2)
                 logger.exception("quota poller coroutine failed")
+        # Model-hygiene proactive catalog diff (AD-45): own ~6h cadence with
+        # jitter, fully supervised. A failed run retries next tick.
+        try:
+            h = model_hub._hygiene_cfg()
+        except Exception:  # noqa: BLE001 - never break the supervisor on config read
+            logger.exception("hygiene scheduling: cannot read hygiene config")
+            h = {}
+        now = datetime.now(timezone.utc)
+        interval = h.get("poll_interval_s", 21600)
+        due = last_hygiene is None or (now - last_hygiene).total_seconds() > interval + random.uniform(0, 600)
+        if h.get("enabled") and h.get("poll_enabled") and due:
+            try:
+                await asyncio.wait_for(_hygiene_check_once(model_hub), timeout=300)
+                last_hygiene = now
+            except Exception:  # noqa: BLE001 - supervision boundary (NFR-2)
+                logger.exception("hygiene check failed")
         await asyncio.sleep(q.probe_interval_s)
 
 
@@ -193,3 +210,148 @@ def start(model_hub):
         logger.info("quota poller stopped")
 
     return stop
+
+
+# ---------------------------------------------------------------------------
+# Model-hygiene proactive catalog diff (Epic H1, AD-45)
+# ---------------------------------------------------------------------------
+
+# tier_id -> (catalog URL, id-list shape, api_key_env or None for public)
+_HYGIENE_CATALOGS: dict[str, tuple[str, str, str | None]] = {
+    "openrouter": ("https://openrouter.ai/api/v1/models", "openai_list", None),
+    "requesty": ("https://router.requesty.ai/v1/models", "openai_list", None),
+    "groq": ("https://api.groq.com/openai/v1/models", "openai_list", "GROQ_API_KEY"),
+    "nvidia": ("https://integrate.api.nvidia.com/v1/models", "openai_list", "NVIDIA_API_KEY"),
+    "aistudio": (
+        "https://generativelanguage.googleapis.com/v1beta/models",
+        "aistudio_list",
+        "GEMINI_API_KEY",
+    ),
+}
+
+
+def _extract_catalog_ids(body: object, shape: str) -> set[str] | None:
+    """Defensive id-set extraction. None = unparseable/empty (fetch failure)."""
+    try:
+        if not isinstance(body, dict):
+            return None
+        ids: set[str] = set()
+        if shape == "openai_list":
+            data = body.get("data") or []
+            for item in data:
+                if isinstance(item, dict) and item.get("id"):
+                    ids.add(str(item["id"]))
+        elif shape == "aistudio_list":
+            for item in body.get("models") or []:
+                name = item.get("name", "") if isinstance(item, dict) else ""
+                name = str(name)
+                if name.startswith("models/"):
+                    name = name[len("models/"):]
+                if name:
+                    ids.add(name)
+        else:
+            return None
+        # An empty id set is suspicious (outage/parse drift) — treat as failure.
+        return ids or None
+    except Exception:  # noqa: BLE001 - defensive; never crash the poller
+        return None
+
+
+async def _fetch_provider_catalog(tier) -> set[str] | None:
+    """Returns the provider's live model-id set, or None on ANY failure.
+
+    Failure (network, auth, unexpected shape, empty set) quarantines nothing —
+    absence of evidence is not evidence of retirement (AD-45).
+    """
+    spec = _HYGIENE_CATALOGS.get(tier.id)
+    if spec is None:
+        logger.debug("hygiene: no catalog fetcher for tier '%s'", tier.id)
+        return None
+    url, shape, key_env = spec
+    headers: dict[str, str] = {}
+    params: dict[str, str] = {}
+    if key_env:
+        key = (os.environ.get(key_env, "") or "").strip()
+        if not key:
+            logger.debug("hygiene: %s not set, skipping %s catalog", key_env, tier.id)
+            return None
+        if tier.id == "aistudio":
+            params["key"] = key
+        else:
+            headers["Authorization"] = f"Bearer {key}"
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(url, headers=headers, params=params)
+            resp.raise_for_status()
+            body = resp.json()
+    except Exception as e:  # noqa: BLE001 - any fetch failure -> skip provider
+        logger.warning("hygiene: catalog fetch failed for tier '%s': %s", tier.id, e)
+        return None
+    ids = _extract_catalog_ids(body, shape)
+    if ids is None:
+        logger.warning("hygiene: unparseable catalog shape for tier '%s'", tier.id)
+    return ids
+
+
+async def _hygiene_check_tier(model_hub, tier, now: datetime) -> bool:
+    """Diffs one tier's configured ids against the live catalog.
+
+    Returns True when the provider was checked; False on fetch failure.
+    Drift quarantines with source="proactive" — but a reactive entry is
+    never touched (AD-45: catalog presence != servability).
+    """
+    catalog_ids = await _fetch_provider_catalog(tier)
+    if catalog_ids is None:
+        return False
+    cfg = model_hub._config()
+    candidates: set[str] = set(tier.models or [])
+    mc = cfg.model_catalog.models if cfg.model_catalog else {}
+    for entry in mc.values():
+        pid = entry.carriers.get(tier.id)
+        if pid:
+            candidates.add(pid)
+    for cid in sorted(candidates):
+        if cid in catalog_ids:
+            continue
+        key = (tier.id, cid)
+        existing = model_hub._retired_models.get(key)
+        if existing is not None and existing.get("source") == "reactive":
+            # Reactive truth (a real call 404'd) outranks the poller diff —
+            # never downgrade it.
+            continue
+        model_hub._quarantine(
+            tier.id, cid,
+            f"absent from {tier.provider or tier.id} catalog",
+            source="proactive",
+        )
+    return True
+
+
+async def _hygiene_check_once(model_hub) -> None:
+    """One proactive catalog-diff cycle. Never raises past this boundary."""
+    cfg = model_hub._config()
+    now = datetime.now(timezone.utc)
+    checked = 0
+    failed: list[str] = []
+    for tier in cfg.tiers_sorted():
+        if not tier.enabled:
+            continue  # disabled tiers (incl. xai) skipped
+        if tier.id == "agy":
+            continue  # no CLI catalog endpoint; reactive UNKNOWN_MODEL covers it
+        try:
+            ok = await _hygiene_check_tier(model_hub, tier, now)
+        except Exception:  # noqa: BLE001 - per-tier supervision boundary
+            logger.exception("hygiene check crashed for tier '%s'", tier.id)
+            ok = False
+        if ok:
+            checked += 1
+        else:
+            failed.append(tier.id)
+    await model_hub.live_quota.set_poller_health(
+        "model_hygiene",
+        not failed,
+        now,
+        detail=(f"catalog diff complete ({checked} tiers)"
+                if not failed
+                else f"fetch failed for: {', '.join(failed)} (quarantined nothing)"),
+    )

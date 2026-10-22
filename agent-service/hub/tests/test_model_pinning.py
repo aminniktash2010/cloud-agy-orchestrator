@@ -318,9 +318,13 @@ def test_ac8_stale_mapping_advances_and_flags_status(registry_with_fake):
 
 
 def test_ac8_stale_mapping_via_404_sniff(registry_with_fake):
+    # AD-40: real adapters return the {"status_code", "body"} envelope on
+    # HTTP-error paths; the router sniffs the envelope, not bare strings.
     FakeAdapter.SCRIPT = {
         "req-404": [(AttemptOutcome.TRANSIENT,
-                     "Client error '404 Not Found' for url 'https://x/v1/chat'")],
+                     {"status_code": 404,
+                      "body": "Client error '404 Not Found' for url 'https://x/v1/chat: "
+                              "The model `req-404` does not exist"})],
     }
     catalog = {"m": ModelCarrierMap(
         aliases=[], carriers={"t1": "req-404", "t2": "good-id"})}

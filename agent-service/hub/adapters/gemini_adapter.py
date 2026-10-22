@@ -129,7 +129,10 @@ class GeminiAdapter(ProviderAdapter):
                 _, _, headers = _exc_details(e)
                 return outcome, {"retry_after_s": parse_retry_after(headers),
                                  "detail": str(e)[-500:]}
-            return outcome, str(e)[-500:]
+            code, _, _ = _exc_details(e)
+            # AD-40: dict envelope carries the HTTP status for the router's
+            # retirement sniffing; _answer_text renders the body identically.
+            return outcome, {"status_code": code, "body": str(e)[-500:]}
 
         latency_ms = int((time.monotonic() - started) * 1000)
         text = getattr(response, "text", "") or ""
@@ -191,7 +194,10 @@ class GeminiAdapter(ProviderAdapter):
                 payload: Any = {"retry_after_s": parse_retry_after(headers),
                                 "detail": str(e)[-500:]}
             else:
-                payload = str(e)[-500:]
+                # AD-40: dict envelope carries the HTTP status for the router's
+                # retirement sniffing; _answer_text renders the body identically.
+                code, _, _ = _exc_details(e)
+                payload = {"status_code": code, "body": str(e)[-500:]}
             yield HubEvent(kind="done", payload={"outcome": outcome,
                                                  "response": payload,
                                                  "latency_ms": 0})

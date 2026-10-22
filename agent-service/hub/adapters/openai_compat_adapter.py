@@ -136,7 +136,9 @@ class OpenAICompatAdapter(ProviderAdapter):
         if outcome == AttemptOutcome.RETRYABLE_429:
             # surface retry info; the router decides the single delayed retry
             return outcome, {"retry_after_s": hints.get("retry-after"), "body": resp.text[-500:]}
-        return outcome, resp.text[-500:]
+        # AD-40: dict envelope carries the HTTP status for the router's
+        # retirement sniffing; _answer_text renders the body identically.
+        return outcome, {"status_code": resp.status_code, "body": resp.text[-500:]}
 
     # ------------------------------------------------------------------
     async def run_stream(
@@ -179,7 +181,8 @@ class OpenAICompatAdapter(ProviderAdapter):
                                                dict(resp.headers), provider="openai-compat")
                         yield HubEvent(kind="done",
                                        payload={"outcome": outcome,
-                                                "response": body.decode("utf-8", "replace")[-500:],
+                                                "response": {"status_code": resp.status_code,
+                                                             "body": body.decode("utf-8", "replace")[-500:]},
                                                 "latency_ms": 0})
                         return
                     async for line in resp.aiter_lines():

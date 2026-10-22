@@ -116,6 +116,16 @@ class ModelCatalogConfig(BaseModel):
     models: dict[str, ModelCarrierMap] = Field(default_factory=dict)
 
 
+class ModelHygieneConfig(BaseModel):
+    """Retired-model hygiene knobs (Epic H1, AD-41/AD-45). All fail-soft."""
+
+    model_config = ConfigDict(extra="ignore")
+    enabled: bool = True
+    quarantine_ttl_s: int = 86400  # 24h: one re-probe per dead id per day
+    poll_enabled: bool = True
+    poll_interval_s: int = 21600  # ~6h proactive catalog diff
+
+
 class HubConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
     version: int = 1
@@ -126,6 +136,7 @@ class HubConfig(BaseModel):
     global_: GlobalSettings = Field(default_factory=GlobalSettings, alias="global")
     quota: QuotaSettings = Field(default_factory=QuotaSettings)
     model_catalog: ModelCatalogConfig = Field(default_factory=ModelCatalogConfig)
+    model_hygiene: ModelHygieneConfig = Field(default_factory=ModelHygieneConfig)
 
     def tiers_sorted(self) -> list[TierConfig]:
         return sorted(self.tiers, key=lambda t: t.order)
