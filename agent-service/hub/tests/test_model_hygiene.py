@@ -363,6 +363,22 @@ def test_ac6_unknown_model_quarantines_without_http_signal(registry_with_fake):
     assert ("t1", "m") in hub._retired_models
 
 
+def test_ac6_free_only_policy_unknown_model_never_quarantines(registry_with_fake):
+    """A free_only policy rejection is a spend guard, not a dead model —
+    UNKNOWN_MODEL carrying the free_only reason must not quarantine."""
+    FakeAdapter.SCRIPT = {
+        "paid-id": [(AttemptOutcome.UNKNOWN_MODEL,
+                     "free_only policy: model 'paid-id' does not end with ':free'")],
+        "n": [(AttemptOutcome.SUCCESS, AdapterResponse(text="ok", model="n"))],
+    }
+    cfg = _tier_cfg(make_tier("t1", 0, ["paid-id"]),
+                    make_tier("t2", 1, ["n"]))
+    hub = make_hub(cfg)
+    r = run(hub.execute(req()))
+    assert r.status == "success" and r.model == "n"
+    assert ("t1", "paid-id") not in hub._retired_models
+
+
 # --- pinned-path migration ------------------------------------------------------
 
 def test_pinned_retired_id_quarantines_and_skips_next_time(registry_with_fake):

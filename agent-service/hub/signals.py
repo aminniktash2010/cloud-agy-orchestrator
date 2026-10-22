@@ -236,7 +236,10 @@ _RETIRED_MODEL_MARKERS = [
 
 
 def is_retired_model(
-    status_code: Optional[int], body_text: str, provider: str = ""
+    status_code: Optional[int],
+    body_text: str,
+    provider: str = "",
+    model_id: str = "",
 ) -> bool:
     """True only for: HTTP 404 AND a retired-model body marker (case-insensitive).
 
@@ -245,10 +248,24 @@ def is_retired_model(
     are never retirement; ``None`` status (CLI subprocess, unparseable
     errors) refuses to judge. ``provider`` is accepted for future
     per-provider tuning; the v1 marker set is provider-agnostic.
+
+    FR-1 guard: the generic ``"not found"`` marker alone is not evidence a
+    *model id* is dead (proxy/gateway/outage pages all say "404 Not Found").
+    When it is the ONLY marker that matched, corroboration is required —
+    the word ``"model"`` or the ``model_id`` itself must appear in the body —
+    otherwise False.
     """
     if status_code != 404:
         return False
     body = (body_text or "").lower().replace("_", " ")
     if not body:
         return False
-    return any(marker in body for marker in _RETIRED_MODEL_MARKERS)
+    matched = [m for m in _RETIRED_MODEL_MARKERS if m in body]
+    if not matched:
+        return False
+    if set(matched) == {"not found"}:
+        # Bare "not found" (proxy/gateway/outage pages) is not evidence a
+        # *model id* is dead — require a model-ish token (AD-39/FR-1).
+        mid = (model_id or "").lower()
+        return "model" in body or (bool(mid) and mid in body)
+    return True

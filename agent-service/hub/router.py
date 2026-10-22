@@ -234,8 +234,17 @@ class ModelHub:
         New entries start at hits=1; repeat signals refresh last_seen/hits.
         A reactive (real-call) verdict outranks a proactive (poller-diff)
         one and is never downgraded (AD-45).
+
+        A ``free_only policy`` rejection is a spend guard, not a dead model —
+        it is never evidence of retirement, so it is refused here rather
+        than quarantining a healthy id for the TTL.
         """
         if not self._hygiene_cfg()["enabled"]:
+            return
+        if "free_only policy" in (signal_excerpt or ""):
+            logger.info("model hygiene: refusing quarantine for '%s' on tier '%s' "
+                        "(free_only policy rejection, not retirement)",
+                        model_id, tier_id)
             return
         now = datetime.now(timezone.utc).isoformat()
         key = (tier_id, model_id)
@@ -469,7 +478,7 @@ class ModelHub:
                                  latency_ms)
                     break  # next carrier (no intra-tier walk under pin)
                 if outcome == AttemptOutcome.TRANSIENT:
-                    if is_retired_model(scode, sbody, tier.provider):
+                    if is_retired_model(scode, sbody, tier.provider, model_id=model):
                         # AD-32/AD-43: retired id on a catalog mapping = stale
                         # mapping AND a dead physical id (http_outcome untouched).
                         self._note_stale(pin.canonical, tier.id, model)
@@ -660,7 +669,7 @@ class ModelHub:
                                  latency_ms)
                     break
                 if outcome == AttemptOutcome.TRANSIENT:
-                    if is_retired_model(scode, sbody, tier.provider):
+                    if is_retired_model(scode, sbody, tier.provider, model_id=model):
                         # AD-32/AD-43: retired id on a catalog mapping = stale
                         # mapping AND a dead physical id (http_outcome untouched).
                         self._note_stale(pin.canonical, tier.id, model)
@@ -1001,7 +1010,7 @@ class ModelHub:
                     # is_retired_model correctly refuses None statuses).
                     self._quarantine(tier.id, model, sbody, source="reactive")
                 elif (outcome == AttemptOutcome.TRANSIENT
-                      and is_retired_model(scode, sbody, tier.provider)):
+                      and is_retired_model(scode, sbody, tier.provider, model_id=model)):
                     self._quarantine(tier.id, model, sbody, source="reactive")
                 else:
                     # Any non-retired outcome: a TTL-expired re-probe heals.
@@ -1253,7 +1262,7 @@ class ModelHub:
                     # retirement signal (CLI markers are the signal here).
                     self._quarantine(tier.id, model, sbody, source="reactive")
                 elif (outcome == AttemptOutcome.TRANSIENT
-                      and is_retired_model(scode, sbody, tier.provider)):
+                      and is_retired_model(scode, sbody, tier.provider, model_id=model)):
                     self._quarantine(tier.id, model, sbody, source="reactive")
                 else:
                     # Any non-retired outcome: a TTL-expired re-probe heals.
