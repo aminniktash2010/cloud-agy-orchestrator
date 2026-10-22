@@ -60,8 +60,11 @@ def _rpc_result(rid: Any, result: Any) -> dict:
     return {"jsonrpc": "2.0", "id": rid, "result": result}
 
 
-def _rpc_error(rid: Any, code: int, message: str) -> dict:
-    return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
+def _rpc_error(rid: Any, code: int, message: str, data: Any = None) -> dict:
+    err: dict = {"code": code, "message": message}
+    if data is not None:
+        err["data"] = data
+    return {"jsonrpc": "2.0", "id": rid, "error": err}
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +74,10 @@ HUB_ASK_DESCRIPTION = (
     "Ask the Model Hub a question when your own Antigravity credits are exhausted. "
     "The answer comes from the fallback provider ladder "
     "(AI Studio \u2192 Groq \u2192 NVIDIA \u2192 OpenRouter \u2192 Requesty) \u2014 "
-    "never from an Antigravity CLI. Answer-only: no repo changes, no tool use."
+    "never from an Antigravity CLI. Answer-only: no repo changes, no tool use. "
+    "If the user has selected a specific model (e.g. 'claude opus 5.5'), pass it "
+    "verbatim in `model` \u2014 the hub will serve that model across every provider "
+    "that carries it, failing over providers transparently. Omit for the default ladder."
 )
 
 HUB_STATUS_DESCRIPTION = (
@@ -104,6 +110,25 @@ def _tool_schemas() -> list[dict]:
                             "Tier IDs to skip. Defaults to [\"agy\"] (your credits and the "
                             "hub's cloud CLI share one pool, so a dry local CLI means a dry "
                             "cloud tier). Pass [] to allow all tiers."
+                        ),
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": (
+                            "Optional: the user's selected model, passed verbatim "
+                            "(e.g. 'claude opus 5.5'). The hub serves that model across "
+                            "every provider that carries it, failing over providers "
+                            "transparently. Omit (or pass 'auto') for the default ladder."
+                        ),
+                    },
+                    "allow_model_fallback": {
+                        "type": "boolean",
+                        "description": (
+                            "If true and no provider can serve the pinned model, fall back "
+                            "to the default ladder and serve a different model — the "
+                            "response sets model_substituted=true loudly. Default false: "
+                            "the hub reports model_unavailable instead of silently "
+                            "substituting."
                         ),
                     },
                 },
@@ -208,9 +233,16 @@ async def _call_hub_ask(rid: Any, arguments: dict, model_hub: ModelHub) -> dict:
         skip_tiers = list(raw_skip)
     else:
         return _rpc_error(rid, -32602, "Invalid params: skip_tiers must be an array of strings")
+    raw_model = arguments.get("model")
+    if raw_model is not None and not isinstance(raw_model, str):
+        return _rpc_error(rid, -32602, "Invalid params: model must be a string")
+    raw_fallback = arguments.get("allow_model_fallback", False)
+    if not isinstance(raw_fallback, bool):
+        return _rpc_error(rid, -32602, "Invalid params: allow_model_fallback must be a boolean")
 
     prompt = question if not context else f"Context:\n{context}\n\nQuestion:\n{question}"
-    req = HubRequest(prompt=prompt, skip_tiers=skip_tiers)
+    req = HubRequest(prompt=prompt, skip_tiers=skip_tiers, model=raw_model,
+                     allow_model_fallback=raw_fallback)
     t0 = time.monotonic()
     try:
         result = await model_hub.execute(req)
@@ -221,6 +253,23 @@ async def _call_hub_ask(rid: Any, arguments: dict, model_hub: ModelHub) -> dict:
     # NFR-4: tool name, tier, latency only — never the question/context, never the token.
     logger.info("mcp tool=hub_ask tier_used=%s latency_ms=%d", result.tier_used, latency_ms)
 
+    if result.status == "model_unavailable":
+        # AD-34: no_match is a client error (-32602); no_carrier is -32603
+        # with a model_unavailable code in data. Never a bare success.
+        err = result.model_error or {}
+        if err.get("code") == "no_match":
+            return _rpc_error(
+                rid, -32602,
+                f"Unknown model '{err.get('input', '')}'. "
+                f"Suggestions: {', '.join(err.get('suggestions', [])) or 'none'}",
+                data={"code": "no_match", "suggestions": err.get("suggestions", [])},
+            )
+        return _rpc_error(
+            rid, -32603,
+            f"Model unavailable: {err.get('message', '')}",
+            data={**err, "code": "model_unavailable"},
+        )
+
     payload = {
         "status": result.status,
         "answer": result.answer or None,
@@ -228,6 +277,9 @@ async def _call_hub_ask(rid: Any, arguments: dict, model_hub: ModelHub) -> dict:
         "provider": result.provider,
         "model": result.model,
         "capability_mode": result.capability_mode,
+        "pinned_model": result.pinned_model,
+        "requested_model": result.requested_model or None,
+        "model_substituted": result.model_substituted,
         "failover_attempts": [a.model_dump() for a in result.failover_attempts],
     }
     return _rpc_result(
