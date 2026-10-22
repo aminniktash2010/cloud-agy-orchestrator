@@ -124,11 +124,12 @@ def _tool_schemas() -> list[dict]:
                     "allow_model_fallback": {
                         "type": "boolean",
                         "description": (
-                            "If true and no provider can serve the pinned model, fall back "
-                            "to the default ladder and serve a different model — the "
-                            "response sets model_substituted=true loudly. Default false: "
-                            "the hub reports model_unavailable instead of silently "
-                            "substituting."
+                            "If no provider can serve the pinned model, fall back "
+                            "to the default ladder and serve the best available "
+                            "model — the response sets model_substituted=true "
+                            "loudly and never claims the pinned model served it. "
+                            "Default true. Pass false for the strict behavior: "
+                            "the hub reports model_unavailable instead."
                         ),
                     },
                 },
@@ -236,7 +237,7 @@ async def _call_hub_ask(rid: Any, arguments: dict, model_hub: ModelHub) -> dict:
     raw_model = arguments.get("model")
     if raw_model is not None and not isinstance(raw_model, str):
         return _rpc_error(rid, -32602, "Invalid params: model must be a string")
-    raw_fallback = arguments.get("allow_model_fallback", False)
+    raw_fallback = arguments.get("allow_model_fallback", True)
     if not isinstance(raw_fallback, bool):
         return _rpc_error(rid, -32602, "Invalid params: allow_model_fallback must be a boolean")
 
