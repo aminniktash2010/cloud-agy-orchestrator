@@ -11,6 +11,7 @@ malformed requests are surfaced, never advanced.
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from hub.types import AttemptOutcome
@@ -20,21 +21,49 @@ from hub.types import AttemptOutcome
 # AGY CLI signals (Tier 0) — kept verbatim from agent-service/main.py
 # ---------------------------------------------------------------------------
 
+# Single source of truth for quota-death detection (terminal hub-mode AD-48):
+# the router's agy_exhausted() and the terminal PTY sniffer both consult this
+# list. It is a protocol contract with the CLI's output — pinned by tests.
+AGY_QUOTA_DEATH_MARKERS = [
+    "individual quota reached",          # real TUI 2026-10-22 (was missed)
+    "please upgrade your subscription",  # real TUI 2026-10-22 (was missed)
+    "credits balance is too low",
+    "resource_exhausted",
+    "check quota",
+    "code 429",
+    "rate limit",
+    "out of credits",
+    'error_code":429',
+]
+
+
 def agy_exhausted(return_code: int, output_text: str) -> bool:
     """Detects whether an agy execution failed due to depleted credits or quota."""
     if return_code == 3:
         return True
-    low_markers = [
-        "credits balance is too low",
-        "resource_exhausted",
-        "check quota",
-        "code 429",
-        "rate limit",
-        "out of credits",
-        'error_code":429',
-    ]
-    lower = output_text.lower()
-    return any(marker in lower for marker in low_markers)
+    lower = (output_text or "").lower()
+    return any(marker in lower for marker in AGY_QUOTA_DEATH_MARKERS)
+
+
+_RESET_RE = re.compile(r"Resets in (?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", re.IGNORECASE)
+
+
+def parse_reset_estimate(text: str) -> Optional[str]:
+    """Humanizes a TUI reset estimate: 'Resets in 98h0m20s' -> '~4d 2h'.
+
+    Unparseable input returns None — the offer banner simply omits the
+    estimate (terminal hub-mode FR-1).
+    """
+    m = _RESET_RE.search(text or "")
+    if not m or not any(m.groups()):
+        return None
+    hours = int(m.group(1) or 0)
+    minutes = int(m.group(2) or 0)
+    if hours >= 48:
+        return f"~{hours // 24}d {hours % 24}h"
+    if hours >= 1:
+        return f"~{hours}h {minutes}m"
+    return f"~{minutes}m"
 
 
 _AGY_UNKNOWN_MODEL_MARKERS = [

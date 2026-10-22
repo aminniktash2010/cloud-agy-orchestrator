@@ -28,7 +28,13 @@ from pydantic import BaseModel
 from hub import ModelHub, load_config
 from hub import observability as hub_observability
 from hub.router import HubError
-from hub.signals import agy_exhausted
+from hub.signals import AGY_QUOTA_DEATH_MARKERS, agy_exhausted, parse_reset_estimate
+from hub.terminal_hubmode import (
+    HubTermState,
+    offer_banner,
+    path_b_banner,
+    run_hub_repl,
+)
 from hub.types import HubRequest, HubResult, RepoContext
 from hub.mcp_server import handle_mcp, require_mcp_token
 
@@ -993,83 +999,189 @@ async def websocket_terminal(websocket: WebSocket, repo: str = "cloud-agy-orches
             repo_dir.mkdir(parents=True, exist_ok=True)
             await websocket.send_text(f"\x1b[33m! Workspace initialized: {e}\x1b[0m\r\n")
 
-        master_fd, slave_fd = pty.openpty()
-        winsize = struct.pack("HHHH", 32, 120, 0, 0)
-        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
-
-        env = build_isolated_env(repo_dir)
-        env["AGY_TARGET_REPO"] = repo_clean
-        env["PWD"] = str(repo_dir)
-        if conversation_id:
-            env["AGY_CONVERSATION_ID"] = conversation_id
-            if conversation_id == "new":
-                env["AGY_FORCE_NEW"] = "1"
-        env["TERM"] = "xterm-256color"
-        env["COLORTERM"] = "truecolor"
-        env["FORCE_COLOR"] = "1"
-        env["PYTHONUNBUFFERED"] = "1"
-
-        def set_controlling_terminal():
-            try:
-                os.setsid()
-                fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
-            except Exception:
-                pass
-
-        shell_bin = "/usr/local/bin/open-agy" if Path("/usr/local/bin/open-agy").exists() else "/bin/bash"
-        proc_args = [shell_bin, repo_clean] if shell_bin == "/usr/local/bin/open-agy" else [shell_bin, "-i"]
-
-        proc = await asyncio.create_subprocess_exec(
-            *proc_args,
-            cwd=str(repo_dir),
-            env=env,
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            preexec_fn=set_controlling_terminal,
-            close_fds=True
-        )
-        os.close(slave_fd)
+        # --- Terminal hub-mode (Epic T1, AD-49): per-connection state machine ---
+        # TUI -> ARMED (quota death seen) -> HUBMODE (user pressed Ctrl+H / /hub)
+        state = HubTermState()
 
         loop = asyncio.get_running_loop()
-
         pty_tail: list[bytes] = []
 
-        def on_pty_readable():
-            try:
-                data = os.read(master_fd, 2048)
-                if data:
-                    pty_tail.append(data)
-                    del pty_tail[:-8]  # keep ~16KB of tail for the exhaustion check
-                    asyncio.create_task(websocket.send_bytes(data))
-            except (OSError, Exception):
-                pass
+        # Mutable TUI incarnation (rebound on /exit respawn)
+        tui_proc = None
+        tui_master_fd = None
+        tui_exit_watcher = None
 
-        loop.add_reader(master_fd, on_pty_readable)
+        def maybe_arm_from_stream() -> None:
+            """Live quota-death sniffing on the PTY tail (AD-48 §3.3)."""
+            if state.phase != "tui" or state.banner_shown:
+                return
+            tail_text = b"".join(pty_tail).decode("utf-8", errors="replace")
+            if any(m in tail_text.lower() for m in AGY_QUOTA_DEATH_MARKERS):
+                state.reset_estimate = parse_reset_estimate(tail_text)
+                state.phase = "armed"
+                state.banner_shown = True
+                asyncio.create_task(
+                    websocket.send_text(offer_banner(state.reset_estimate))
+                )
 
-        async def watch_proc_exit():
-            # FR-5.3: honest exhaustion banner — this terminal is agy-only;
-            # failover happens via /chat, never here.
-            rc = await proc.wait()
-            tail = b"".join(pty_tail).decode("utf-8", errors="replace")
-            if agy_exhausted(rc if rc is not None else -1, tail):
+        async def spawn_tui():
+            """(Re)spawn the agy TUI in a fresh PTY; wires reader + exit watcher."""
+            nonlocal tui_proc, tui_master_fd, tui_exit_watcher
+            master_fd, slave_fd = pty.openpty()
+            winsize = struct.pack("HHHH", 32, 120, 0, 0)
+            fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+
+            env = build_isolated_env(repo_dir)
+            env["AGY_TARGET_REPO"] = repo_clean
+            env["PWD"] = str(repo_dir)
+            if conversation_id:
+                env["AGY_CONVERSATION_ID"] = conversation_id
+                if conversation_id == "new":
+                    env["AGY_FORCE_NEW"] = "1"
+            env["TERM"] = "xterm-256color"
+            env["COLORTERM"] = "truecolor"
+            env["FORCE_COLOR"] = "1"
+            env["PYTHONUNBUFFERED"] = "1"
+
+            def set_controlling_terminal():
                 try:
-                    await websocket.send_text(
-                        "\r\n\x1b[1;33m⚠️ AGY credits exhausted in this terminal.\x1b[0m\r\n"
-                        "\x1b[90mThis terminal is agy-only — send the task via /chat "
-                        "(PWA / Gmail) and the model hub will fail over automatically. "
-                        "Check GET /hub/status.\x1b[0m\r\n"
-                    )
+                    os.setsid()
+                    fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
                 except Exception:
                     pass
 
-        exit_watcher = asyncio.create_task(watch_proc_exit())
+            shell_bin = "/usr/local/bin/open-agy" if Path("/usr/local/bin/open-agy").exists() else "/bin/bash"
+            proc_args = [shell_bin, repo_clean] if shell_bin == "/usr/local/bin/open-agy" else [shell_bin, "-i"]
+
+            proc = await asyncio.create_subprocess_exec(
+                *proc_args,
+                cwd=str(repo_dir),
+                env=env,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                preexec_fn=set_controlling_terminal,
+                close_fds=True
+            )
+            os.close(slave_fd)
+            pty_tail.clear()  # new incarnation: never sniff the old TUI's tail
+
+            def on_pty_readable():
+                try:
+                    data = os.read(master_fd, 2048)
+                except OSError:
+                    return
+                if data:
+                    pty_tail.append(data)
+                    del pty_tail[:-8]  # keep ~16KB of tail for the exhaustion check
+                    maybe_arm_from_stream()
+                    asyncio.create_task(websocket.send_bytes(data))
+
+            loop.add_reader(master_fd, on_pty_readable)
+
+            async def watch_proc_exit():
+                # Path B: TUI exited on exhausted quota -> offer hub mode.
+                # (The old "agy-only, use /chat" banner is superseded by hub mode.)
+                rc = await proc.wait()
+                try:
+                    loop.remove_reader(master_fd)  # no EIO spin on the dead PTY
+                except Exception:
+                    pass
+                tail = b"".join(pty_tail).decode("utf-8", errors="replace")
+                if agy_exhausted(rc if rc is not None else -1, tail):
+                    if state.phase == "tui" and not state.banner_shown:
+                        state.reset_estimate = parse_reset_estimate(tail)
+                        state.phase = "armed"
+                        state.banner_shown = True
+                        try:
+                            await websocket.send_text(
+                                path_b_banner(state.reset_estimate)
+                            )
+                        except Exception:
+                            pass
+
+            tui_proc, tui_master_fd = proc, master_fd
+            tui_exit_watcher = asyncio.create_task(watch_proc_exit())
+
+        async def park_tui():
+            """Park the TUI: terminate -> 50ms -> kill. Idempotent (AD-51) —
+            on an already-dead proc (Path B) this is a no-op chain."""
+            nonlocal tui_proc, tui_master_fd, tui_exit_watcher
+            if tui_exit_watcher is not None:
+                tui_exit_watcher.cancel()
+                tui_exit_watcher = None
+            if tui_master_fd is not None:
+                try:
+                    loop.remove_reader(tui_master_fd)
+                except Exception:
+                    pass
+                try:
+                    os.close(tui_master_fd)
+                except Exception:
+                    pass
+                tui_master_fd = None
+            if tui_proc is not None:
+                try:
+                    tui_proc.terminate()
+                    await asyncio.sleep(0.05)
+                    if tui_proc.returncode is None:
+                        tui_proc.kill()
+                except Exception:
+                    pass
+                tui_proc = None
+
+        hub_q: asyncio.Queue | None = None
+        repl_task: asyncio.Task | None = None
+
+        async def enter_hubmode():
+            nonlocal hub_q, repl_task
+            state.phase = "hubmode"
+            await park_tui()
+            hub_q = asyncio.Queue()
+            repl_task = asyncio.create_task(
+                run_hub_repl(
+                    websocket.send_text, websocket.send_bytes,
+                    hub_q, model_hub, state,
+                )
+            )
+            # Eager reap: act on "respawn"/"stay" the moment the REPL returns,
+            # without waiting for the user's next keystroke.
+            repl_task.add_done_callback(
+                lambda t: asyncio.create_task(reap_repl()))
+
+        async def reap_repl():
+            """Act on a finished REPL: "respawn" -> TUI back, "stay" -> new REPL."""
+            nonlocal hub_q, repl_task
+            if repl_task is None or not repl_task.done():
+                return
+            action = None
+            if not repl_task.cancelled():
+                try:
+                    action = repl_task.result()
+                except Exception:
+                    action = None
+            repl_task, hub_q = None, None
+            if action == "respawn":
+                await spawn_tui()
+                state.phase = "tui"
+                state.banner_shown = False
+                state.armed_line.clear()
+                # session_pin is kept (AD-56): harmless if hub mode re-enters.
+                await websocket.send_text(
+                    "\r\n\x1b[32m✔ agy TUI reconnected.\x1b[0m\r\n"
+                )
+            elif action == "stay":
+                await enter_hubmode()
+
+        await spawn_tui()
 
         try:
             while True:
+                await reap_repl()
                 msg = await websocket.receive()
+                data: bytes | None = None
                 if "bytes" in msg and msg["bytes"]:
-                    os.write(master_fd, msg["bytes"])
+                    data = msg["bytes"]
                 elif "text" in msg and msg["text"]:
                     try:
                         parsed = json.loads(msg["text"])
@@ -1077,32 +1189,72 @@ async def websocket_terminal(websocket: WebSocket, repo: str = "cloud-agy-orches
                             r = int(parsed.get("rows", 32))
                             c = int(parsed.get("cols", 120))
                             winsize = struct.pack("HHHH", r, c, 0, 0)
-                            fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+                            if tui_master_fd is not None:
+                                try:
+                                    fcntl.ioctl(
+                                        tui_master_fd, termios.TIOCSWINSZ, winsize
+                                    )
+                                except OSError:
+                                    pass
+                            continue
                         elif parsed.get("type") == "input":
-                            os.write(master_fd, parsed.get("data", "").encode("utf-8"))
+                            data = parsed.get("data", "").encode("utf-8")
                         else:
-                            os.write(master_fd, msg["text"].encode("utf-8"))
+                            data = msg["text"].encode("utf-8")
                     except json.JSONDecodeError:
-                        os.write(master_fd, msg["text"].encode("utf-8"))
+                        data = msg["text"].encode("utf-8")
+                if data is None:
+                    continue
+                if state.phase == "hubmode":
+                    # The REPL owns input now; the PTY is parked.
+                    if hub_q is not None:
+                        hub_q.put_nowait(data)
+                    await reap_repl()
+                    continue
+                if state.phase == "armed":
+                    if b"\x08" in data:  # AD-50: Ctrl+H intercept (consumed)
+                        await enter_hubmode()
+                        continue
+                    state.armed_line += data
+                    if b"\r" in state.armed_line or b"\n" in state.armed_line:
+                        line = bytes(state.armed_line).decode(
+                            "utf-8", errors="replace"
+                        )
+                        state.armed_line.clear()
+                        if line.strip() == "/hub":
+                            await enter_hubmode()
+                            continue
+                # TUI / ARMED (non-switch): forward to the PTY. Guarded so a
+                # dead PTY (Path B) never kills the input loop (AD-49).
+                if tui_master_fd is not None:
+                    try:
+                        os.write(tui_master_fd, data)
+                    except OSError:
+                        pass
         except (WebSocketDisconnect, Exception):
             pass
         finally:
-            exit_watcher.cancel()
-            try:
-                loop.remove_reader(master_fd)
-            except Exception:
-                pass
-            try:
-                os.close(master_fd)
-            except Exception:
-                pass
-            try:
-                proc.terminate()
-                await asyncio.sleep(0.05)
-                if proc.returncode is None:
-                    proc.kill()
-            except Exception:
-                pass
+            if repl_task is not None:
+                repl_task.cancel()
+            if tui_exit_watcher is not None:
+                tui_exit_watcher.cancel()
+            if tui_master_fd is not None:
+                try:
+                    loop.remove_reader(tui_master_fd)
+                except Exception:
+                    pass
+                try:
+                    os.close(tui_master_fd)
+                except Exception:
+                    pass
+            if tui_proc is not None:
+                try:
+                    tui_proc.terminate()
+                    await asyncio.sleep(0.05)
+                    if tui_proc.returncode is None:
+                        tui_proc.kill()
+                except Exception:
+                    pass
     except Exception as e:
         try:
             await websocket.send_text(f"\r\n\x1b[31m[PTY ERROR] {e}\x1b[0m\r\n")

@@ -195,6 +195,23 @@ class ModelHub:
     # ------------------------------------------------------------------
     # Model pin (AD-28…AD-36)
     # ------------------------------------------------------------------
+    def resolve_model_pin(self, name: str) -> tuple[str | None, list[str]]:
+        """Public pin validation for the terminal hub-mode REPL (T1-S4).
+
+        Returns (canonical | None, suggestions). (None, []) for unpinned
+        sentinels ("", "auto", "default"); (None, suggestions) when the name
+        resolves to nothing — the caller keeps the existing pin.
+        """
+        raw = (name or "").strip()
+        if not raw or raw.lower() in ("auto", "default"):
+            return None, []
+        request = HubRequest(prompt="", model=raw)
+        pin = self._resolve_pin(request, self._config())
+        if pin is None or isinstance(pin, PinError):
+            catalog = ModelCatalog(self._config().model_catalog)
+            return None, catalog.suggest(raw)
+        return pin.canonical, []
+
     def _resolve_pin(self, request: HubRequest, cfg: HubConfig) -> Pin | PinError | None:
         """None = unpinned (the catalog is never consulted — AC-4 relies on
         this being structural). Sentinels "auto"/"default"/"" mean unpinned."""

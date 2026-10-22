@@ -239,3 +239,56 @@ def test_is_retired_model_generic_marker_with_model_id_corroborates():
     assert is_retired_model(
         404, "Error: gemini-2.5-flash not found", model_id="gpt-oss-120b"
     ) is False
+
+
+# --- Terminal hub-mode: quota-death markers (T1-S1) -------------------------
+
+_REAL_TUI_OUTPUT = (
+    "⚠ Individual quota reached. Please upgrade your subscription "
+    "to increase your limits. Resets in 98h0m20s.\n"
+    "Error ID: e8613aea-038b-4ba7-bf04-7670e5960fff-1"
+)
+
+
+def test_agy_quota_death_markers_include_real_tui_strings():
+    from hub.signals import AGY_QUOTA_DEATH_MARKERS  # noqa: E402
+    assert "individual quota reached" in AGY_QUOTA_DEATH_MARKERS
+    assert "please upgrade your subscription" in AGY_QUOTA_DEATH_MARKERS
+
+
+def test_agy_exhausted_matches_verbatim_2026_10_22_tui_output():
+    # The exact failure that started this epic — previously missed.
+    assert agy_exhausted(1, _REAL_TUI_OUTPUT) is True
+
+
+def test_agy_outcome_classifies_real_tui_output_as_exhausted():
+    assert agy_outcome(1, _REAL_TUI_OUTPUT) is AttemptOutcome.EXHAUSTED
+
+
+def test_parse_reset_estimate_days():
+    from hub.signals import parse_reset_estimate  # noqa: E402
+    assert parse_reset_estimate(_REAL_TUI_OUTPUT) == "~4d 2h"
+
+
+def test_parse_reset_estimate_hours_and_minutes():
+    from hub.signals import parse_reset_estimate  # noqa: E402
+    assert parse_reset_estimate("Resets in 1h30m0s.") == "~1h 30m"
+    assert parse_reset_estimate("Resets in 45m10s.") == "~45m"
+    assert parse_reset_estimate("Resets in 2h.") == "~2h 0m"
+
+
+def test_parse_reset_estimate_unparseable_returns_none():
+    from hub.signals import parse_reset_estimate  # noqa: E402
+    assert parse_reset_estimate("Individual quota reached. No estimate here.") is None
+    assert parse_reset_estimate("") is None
+
+
+def test_quota_death_no_false_positive_on_normal_traffic():
+    for benign in [
+        "> hi",
+        "error: command not found: /model",
+        "Build failed: undefined symbol",
+        "Antigravity CLI 1.4.5",
+        "TypeError: cannot read property of undefined",
+    ]:
+        assert agy_exhausted(1, benign) is False, benign
