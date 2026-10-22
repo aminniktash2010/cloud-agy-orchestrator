@@ -169,7 +169,7 @@ class HubRequest(BaseModel):
     requested_model_override: Optional[str] = None  # pins first Tier-0 model (legacy ChatCommand.model)
     skip_tiers: list[str] = Field(default_factory=list)  # tier IDs the router must never attempt (MCP hub_ask defaults to ["agy"])
     model: Optional[str] = None  # free-text model pin; None/""/"auto"/"default" = unpinned (today's ladder)
-    allow_model_fallback: bool = False  # loud substitution: serve a different model when no carrier serves the pin
+    allow_model_fallback: bool = True  # loud substitution: serve a different model when no carrier serves the pin (default on; explicit False restores strict model_unavailable)
 
 
 class ModelAttempt(BaseModel):

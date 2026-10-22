@@ -95,21 +95,37 @@ def test_ac2_unknown_model_no_provider_calls(registry_with_fake, monkeypatch):
     assert calls == []
 
 
-# --- AC-3: only carrier disabled -> model_unavailable --------------------------
+# --- AC-3: only carrier disabled -> strict False is model_unavailable ---------
 
-def test_ac3_only_carrier_disabled(registry_with_fake):
+def test_ac3_only_carrier_disabled_strict_false(registry_with_fake):
     cfg = cfg_with_catalog(
         make_tier("xai", 0, ["grok-x"], enabled=False),
         catalog={"zzz-model": ModelCarrierMap(aliases=[], carriers={"xai": "grok-x"})},
     )
     hub = make_hub(cfg)
-    result = run(hub.execute(req(model="zzz-model")))
+    result = run(hub.execute(req(model="zzz-model", allow_model_fallback=False)))
     assert result.status == "model_unavailable"
     err = result.model_error
     assert err["code"] == "no_carrier"
     assert err["pinned_model"] == "zzz-model"
     assert err["carriers_tried"] == []
     assert {"tier": "xai", "reason": "skip: disabled"} in err["exclusions"]
+
+
+def test_ac3_only_carrier_disabled_default_falls_back(registry_with_fake):
+    cfg = cfg_with_catalog(
+        make_tier("xai", 0, ["grok-x"], enabled=False),
+        make_tier("fallback", 1, ["plain-model"]),
+        catalog={"zzz-model": ModelCarrierMap(aliases=[], carriers={"xai": "grok-x"})},
+    )
+    hub = make_hub(cfg)
+    result = run(hub.execute(req(model="zzz-model")))
+    assert result.status == "success"
+    assert result.model_substituted is True
+    assert result.pinned_model == "zzz-model"
+    assert result.requested_model == "zzz-model"
+    assert result.tier_used == "fallback"
+    assert result.model == "plain-model"  # served model differs from the pin
 
 
 # --- AC-4: differential regression (unpinned byte-identical) -------------------
@@ -239,7 +255,19 @@ def test_ac7_allow_model_fallback_loud_substitution(registry_with_fake):
     assert any(a.reason == "skip: disabled" for a in result.failover_attempts)
 
 
-def test_ac7_default_off_is_model_unavailable(registry_with_fake):
+def test_ac7_explicit_false_is_model_unavailable(registry_with_fake):
+    cfg = cfg_with_catalog(
+        make_tier("xai", 0, ["grok-x"], enabled=False),
+        make_tier("fallback", 1, ["plain-model"]),
+        catalog={"zzz-model": ModelCarrierMap(aliases=[], carriers={"xai": "grok-x"})},
+    )
+    hub = make_hub(cfg)
+    result = run(hub.execute(req(model="zzz-model", allow_model_fallback=False)))
+    assert result.status == "model_unavailable"
+    assert result.model_substituted is False
+
+
+def test_ac7_default_on_falls_back_to_ladder(registry_with_fake):
     cfg = cfg_with_catalog(
         make_tier("xai", 0, ["grok-x"], enabled=False),
         make_tier("fallback", 1, ["plain-model"]),
@@ -247,8 +275,14 @@ def test_ac7_default_off_is_model_unavailable(registry_with_fake):
     )
     hub = make_hub(cfg)
     result = run(hub.execute(req(model="zzz-model")))
-    assert result.status == "model_unavailable"
-    assert result.model_substituted is False
+    assert result.status == "success"
+    assert result.model_substituted is True
+    assert result.requested_model == "zzz-model"
+    assert result.pinned_model == "zzz-model"
+    assert result.tier_used == "fallback"
+    assert result.model == "plain-model"  # a different model, served loudly
+    # The pinned phase is preserved in the attempt log.
+    assert any(a.reason == "skip: disabled" for a in result.failover_attempts)
 
 
 # --- AC-8: stale mappings -------------------------------------------------------
@@ -331,7 +365,7 @@ def test_pinned_stream_no_intra_tier_switch_message(registry_with_fake):
         catalog={"m": ModelCarrierMap(aliases=[], carriers={"only-tier": "bad-id"})},
     )
     hub = make_hub(cfg)
-    events = run(collect_events(hub, req(model="m")))
+    events = run(collect_events(hub, req(model="m", allow_model_fallback=False)))
     texts = [e.payload.get("text", "") for e in events
              if e.kind == "status" and isinstance(e.payload, dict)]
     assert not any("switching to" in t for t in texts)
@@ -366,8 +400,25 @@ def test_mcp_hub_ask_no_carrier_minus_32603(registry_with_fake):
         catalog={"zzz-model": ModelCarrierMap(aliases=[], carriers={"xai": "grok-x"})},
     )
     hub = make_hub(cfg)
-    res = run(_call_hub_ask(7, {"question": "hi", "model": "zzz-model"}, hub))
+    res = run(_call_hub_ask(7, {"question": "hi", "model": "zzz-model",
+                                "allow_model_fallback": False}, hub))
     err = res["error"]
     assert err["code"] == -32603
     assert err["data"]["code"] == "model_unavailable"
     assert err["data"]["pinned_model"] == "zzz-model"
+
+
+def test_mcp_hub_ask_no_carrier_falls_back_by_default(registry_with_fake):
+    cfg = cfg_with_catalog(
+        make_tier("xai", 0, ["grok-x"], enabled=False),
+        make_tier("fallback", 1, ["plain-model"]),
+        catalog={"zzz-model": ModelCarrierMap(aliases=[], carriers={"xai": "grok-x"})},
+    )
+    hub = make_hub(cfg)
+    res = run(_call_hub_ask(7, {"question": "hi", "model": "zzz-model"}, hub))
+    payload = json.loads(res["result"]["content"][0]["text"])
+    assert payload["status"] == "success"
+    assert payload["model_substituted"] is True
+    assert payload["pinned_model"] == "zzz-model"
+    assert payload["tier_used"] == "fallback"
+    assert payload["model"] == "plain-model"

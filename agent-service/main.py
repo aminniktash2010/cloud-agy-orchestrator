@@ -173,7 +173,7 @@ class ChatCommand(BaseModel):
     use_feature_branch: bool = False
     conversation_id: Optional[str] = None
     continue_session: bool = True
-    allow_model_fallback: bool = False  # loud substitution when no carrier serves a pinned model
+    allow_model_fallback: bool = True  # loud substitution when no carrier serves a pinned model (default on; explicit False restores strict model_unavailable)
 
 
 async def ensure_cached_tools():
