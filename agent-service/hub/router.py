@@ -279,6 +279,11 @@ class ModelHub:
             logger.info("hub prompt truncated to %d chars", cfg.global_.max_input_chars)
 
         for tier in cfg.tiers_sorted():
+            # Structural tier skip (AD-22, e.g. MCP hub_ask default ["agy"]):
+            # checked BEFORE _skip_reason so the reason stays distinct.
+            if tier.id in (request.skip_tiers or []):
+                self._record(attempts, tier, "", "skipped", "skip: mcp_skip_tiers")
+                continue
             skip = self._skip_reason(tier, cfg)
             if skip:
                 self._record(attempts, tier, "", "skipped", f"skip: {skip}")
@@ -450,6 +455,11 @@ class ModelHub:
         prev_tier: TierConfig | None = None
 
         for tier in cfg.tiers_sorted():
+            # Structural tier skip (AD-22): checked BEFORE _skip_reason so the
+            # reason stays distinct in failover_attempts.
+            if tier.id in (request.skip_tiers or []):
+                self._record(attempts, tier, "", "skipped", "skip: mcp_skip_tiers")
+                continue
             skip = self._skip_reason(tier, cfg)
             if skip:
                 self._record(attempts, tier, "", "skipped", f"skip: {skip}")

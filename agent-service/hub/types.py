@@ -154,6 +154,7 @@ class HubRequest(BaseModel):
     continue_session: bool = True
     repo_ctx: Optional[RepoContext] = None
     requested_model_override: Optional[str] = None  # pins first Tier-0 model (legacy ChatCommand.model)
+    skip_tiers: list[str] = Field(default_factory=list)  # tier IDs the router must never attempt (MCP hub_ask defaults to ["agy"])
 
 
 class ModelAttempt(BaseModel):

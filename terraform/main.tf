@@ -56,7 +56,8 @@ locals {
   secrets = toset([
     "GEMINI_API_KEY",
     "GITHUB_PAT",
-    "WEBHOOK_SECRET"
+    "WEBHOOK_SECRET",
+    "HUB_MCP_TOKEN"
   ])
 }
 
