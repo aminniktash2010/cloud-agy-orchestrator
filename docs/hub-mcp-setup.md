@@ -72,7 +72,7 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST https://agy-cloud-orchestrator-
 | `503` from `/mcp` | `HUB_MCP_TOKEN` not set server-side yet → finish step 2, then redeploy |
 | `agy mcp list` shows `disabled` | `agy mcp enable model-hub` |
 | Agent never calls the tools | The tools are named `hub_ask` / `hub_status`; ask explicitly, e.g. *"check hub_status on model-hub"* |
-| `hub_ask` answers say `tier_used: "agy"` | You passed `skip_tiers: []` explicitly — the default skips the cloud CLI tier; remove the override |
+| Expecting the cloud CLI tier to answer via MCP | It can't — the agy tier needs a repo context the MCP route never builds, so it is always skipped (`skip: no_repo_ctx` in `failover_attempts`); MCP answers come from the fallback ladder (AI Studio → Groq → …) |
 
 ## Token rotation
 

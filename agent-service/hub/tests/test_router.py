@@ -8,7 +8,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from hub.router import HubError, ModelHub  # noqa: E402
-from hub.types import AdapterResponse, AttemptOutcome, CapabilityMode, HubConfig, HubRequest  # noqa: E402
+from hub.types import AdapterResponse, AttemptOutcome, CapabilityMode, HubConfig, HubRequest, RepoContext  # noqa: E402
 
 from conftest import FakeAdapter, make_hub, make_tier, run  # noqa: E402
 
@@ -164,6 +164,8 @@ def test_auth_fault_required_tier_surfaces(registry_with_fake):
 
 
 def test_bad_request_surfaces_never_advances(registry_with_fake):
+    # With a repo context (the /chat path), BAD_REQUEST still fails loud —
+    # the fail-loud raise is preserved for genuine /chat misuse.
     FakeAdapter.SCRIPT = {"g1": [(AttemptOutcome.BAD_REQUEST, "400 malformed")]}
     cfg = base_cfg(
         make_tier("aistudio", 0, ["g1"]),
@@ -171,7 +173,47 @@ def test_bad_request_surfaces_never_advances(registry_with_fake):
     )
     hub = make_hub(cfg)
     with pytest.raises(HubError, match="bad request"):
-        run(hub.execute(req()))
+        run(hub.execute(req(repo_ctx=RepoContext(repo_dir="/tmp/x"))))
+
+
+def test_bad_request_without_repo_ctx_skips_tier(registry_with_fake):
+    # Repo-less callers (MCP hub_ask): BAD_REQUEST skips the tier instead of
+    # raising, so fallback tiers still serve the request.
+    FakeAdapter.SCRIPT = {"g1": [(AttemptOutcome.BAD_REQUEST, "400 malformed")]}
+    cfg = base_cfg(
+        make_tier("aistudio", 0, ["g1"]),
+        make_tier("groq", 1, ["q1"]),
+    )
+    hub = make_hub(cfg)
+    result = run(hub.execute(req()))  # no repo_ctx
+    assert result.status == "success"
+    assert result.tier_used == "groq"
+    skips = [a for a in result.failover_attempts
+             if a.tier == "aistudio" and a.outcome == "skipped"]
+    assert any(a.reason == "skip: no_repo_ctx" for a in skips), \
+        f"expected a 'skip: no_repo_ctx' record, got: {result.failover_attempts}"
+
+
+def test_bad_request_without_repo_ctx_skips_tier_stream(registry_with_fake):
+    # Same contract on the streaming path: no error event, fallback serves.
+    FakeAdapter.SCRIPT = {"g1": [(AttemptOutcome.BAD_REQUEST, "400 malformed")]}
+    cfg = base_cfg(
+        make_tier("aistudio", 0, ["g1"]),
+        make_tier("groq", 1, ["q1"]),
+    )
+    hub = make_hub(cfg)
+
+    async def collect():
+        events = []
+        async for ev in hub.execute_stream(req()):  # no repo_ctx
+            events.append(ev)
+        return events
+
+    events = run(collect())
+    kinds = [e.kind for e in events]
+    assert "error" not in kinds
+    done = next(e for e in events if e.kind == "done")
+    assert done.payload["tier_used"] == "groq"
 
 
 def test_paid_tier_triple_gate_default_off(registry_with_fake):

@@ -147,7 +147,7 @@ def test_hub_ask_default_skips_agy_tier(registry_with_fake, monkeypatch):
     assert calls == [], "agy adapter subprocess was invoked"
     skips = [a for a in payload["failover_attempts"]
              if a["tier"] == "agy" and a["outcome"] == "skipped"]
-    assert skips and skips[0]["reason"] == "skip: mcp_skip_tiers"
+    assert skips and skips[0]["reason"] == "skip: skip_tiers"
 
 
 def test_hub_ask_escape_hatch_reallows_tier_zero(registry_with_fake):
@@ -165,6 +165,37 @@ def test_hub_ask_escape_hatch_reallows_tier_zero(registry_with_fake):
     assert payload["tier_used"] == "agy"
     assert not any(a["tier"] == "agy" and a["outcome"] == "skipped"
                    for a in payload["failover_attempts"])
+
+
+# AC-3 (review fix): escape hatch with the REAL agy adapter. The MCP route
+# never builds a repo_ctx, so the real AgyAdapter returns BAD_REQUEST; the
+# router must skip the tier gracefully ("skip: no_repo_ctx") and serve the
+# fallback — never -32603 — and never spawn the CLI subprocess.
+def test_hub_ask_escape_hatch_real_adapter_skips_without_repo_ctx(
+    registry_with_fake, monkeypatch,
+):
+    import hub.adapters.agy_adapter as agy_mod
+
+    calls = []
+
+    def spy(*a, **k):
+        calls.append((a, k))
+        raise AssertionError("agy subprocess must never run without repo_ctx")
+
+    monkeypatch.setattr(agy_mod.subprocess, "run", spy)
+    hub = _hub_two_tiers()
+
+    code, resp = run(handle_mcp(
+        _call_body("hub_ask", {"question": "2+2?", "skip_tiers": []}), hub))
+    assert code == 200
+    payload = _text_of(resp["result"])
+    assert payload["status"] == "success"
+    assert payload["tier_used"] == "fallback"
+    assert calls == [], "agy adapter subprocess was invoked"
+    skips = [a for a in payload["failover_attempts"]
+             if a["tier"] == "agy" and a["outcome"] == "skipped"]
+    assert any(a["reason"] == "skip: no_repo_ctx" for a in skips), \
+        f"expected a 'skip: no_repo_ctx' record, got: {skips}"
 
 
 def test_hub_ask_ladder_empty_is_structured(registry_with_fake):
