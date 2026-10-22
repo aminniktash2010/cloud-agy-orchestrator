@@ -283,6 +283,17 @@ def test_parse_reset_estimate_unparseable_returns_none():
     assert parse_reset_estimate("") is None
 
 
+def test_parse_reset_estimate_seconds_only():
+    # P10: "Resets in 90s" used to humanize as "~0m".
+    from hub.signals import parse_reset_estimate  # noqa: E402
+    assert parse_reset_estimate("Resets in 90s") == "~90s"
+    assert parse_reset_estimate("Resets in 5s.") == "~5s"
+    # Existing shapes unchanged:
+    assert parse_reset_estimate("Resets in 45m10s.") == "~45m"
+    assert parse_reset_estimate("Resets in 1h30m0s.") == "~1h 30m"
+
+
+
 def test_quota_death_no_false_positive_on_normal_traffic():
     for benign in [
         "> hi",

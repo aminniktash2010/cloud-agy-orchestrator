@@ -25,8 +25,10 @@ def test_offer_banner_with_estimate():
     b = offer_banner("~4d 2h")
     assert "Antigravity quota exhausted in this terminal." in b
     assert "Resets in ~4d 2h." in b
-    assert "Press Ctrl+H for HUB MODE" in b
-    assert "Or type /hub and press Enter." in b
+    # P9: /hub is the primary CTA (Ctrl+H is dead on desktop browsers);
+    # Ctrl+H survives as the iPhone key-bar note.
+    assert "Type /hub and press Enter for HUB MODE" in b
+    assert "Ctrl+H works too" in b
     assert "(Ignore this to keep the TUI.)" in b
     assert HONEST_CEILING in b
 
@@ -34,14 +36,14 @@ def test_offer_banner_with_estimate():
 def test_offer_banner_without_estimate_omits_bracket():
     b = offer_banner(None)
     assert "Resets in" not in b
-    assert "Press Ctrl+H for HUB MODE" in b
+    assert "Type /hub and press Enter for HUB MODE" in b
 
 
 def test_path_b_banner_variant_first_line():
     b = path_b_banner("~4d 2h")
     first = next(ln for ln in b.splitlines() if ln.strip())
     assert "The agy session ended on exhausted quota." in first
-    assert "Press Ctrl+H" in b
+    assert "Type /hub and press Enter for HUB MODE" in b
 
 
 def test_hubmode_banner_states_ceiling():
@@ -352,4 +354,160 @@ def test_ctrl_c_cancels_inflight_stream():
         assert result[0] == "respawn"
         assert "^C" in ws.texts()
         assert "hub> " in ws.texts()  # back at prompt after cancel
+    run(_inner())
+
+
+# --- P1: ANSI escape injection stripped from model text ------------------------
+
+def test_p1_render_strips_ansi_escape_injection():
+    async def _inner():
+        repl, ws, q, hub, st = make_repl()
+        await repl._render(HubEvent(kind="log", payload=(
+            "hello\x1b[2Jworld"            # CSI: clear screen
+            "\x1b]0;spoofed title\x07!"   # OSC: set window title
+            "\x1bc"                        # RIS: full terminal reset
+            "\x1b[38;5;196mred\x1b[0m"    # SGR colors
+            "done"
+        )))
+        out = ws.texts()
+        assert "\x1b" not in out
+        assert out == "helloworld!reddone"  # the "!" after the OSC ST is literal text
+    run(_inner())
+
+
+def test_p1_render_status_keeps_intentional_ansi():
+    # P1 strips ONLY the log branch — status/tier_switch keep their dim styling.
+    async def _inner():
+        repl, ws, q, hub, st = make_repl()
+        await repl._render(HubEvent(kind="status", payload={"text": "trying groq"}))
+        assert "\x1b[90m" in ws.texts()
+        await repl._render(HubEvent(kind="tier_switch", payload={
+            "to": {"tier": "groq", "model": "llama"}, "reason": "x"}))
+        assert "\x1b[90m" in ws.texts()
+    run(_inner())
+
+
+def test_p1_dict_log_payload_stripped_too():
+    async def _inner():
+        repl, ws, q, hub, st = make_repl()
+        await repl._render(HubEvent(
+            kind="log", payload={"text": "a\x1b[Ab"}))
+        assert ws.texts() == "ab"
+    run(_inner())
+
+
+# --- P2: stream exceptions surface as an error line -----------------------------
+
+def test_p2_ask_surfaces_consumer_exception():
+    async def _inner():
+        async def raising(request):
+            yield HubEvent(kind="log", payload="partial")
+            raise RuntimeError("boom")
+
+        ws = StubWebSocket()
+        q: asyncio.Queue = asyncio.Queue()
+        hub = StubHub()
+        hub.execute_stream = raising
+        repl = HubRepl(ws.send_text, ws.send_bytes, q, hub, HubTermState())
+        await repl._ask("hello")
+        t = ws.texts()
+        assert "partial" in t  # chunk before the failure still rendered
+        assert "hub error: boom" in t  # failure surfaced, not swallowed
+    run(_inner())
+
+
+# --- P3: one bad iteration never wedges the REPL ---------------------------------
+
+def test_p3_repl_survives_read_line_exception():
+    async def _inner():
+        repl, ws, q, hub, st = make_repl()
+        calls = 0
+        orig = repl._read_line
+
+        async def flaky():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("read boom")
+            return await orig()
+
+        repl._read_line = flaky
+        t = asyncio.create_task(repl.run())
+        try:
+            for _ in range(500):
+                if "hub error: read boom" in ws.texts():
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                raise AssertionError("error line never printed (REPL wedged)")
+            feed(q, b"/help\r")
+            for _ in range(500):
+                if "Hub-mode commands" in ws.texts():
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                raise AssertionError("REPL did not survive the exception")
+        finally:
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+    run(_inner())
+
+
+# --- P11: pasted-chunk remainder drained in order ----------------------------------
+
+def test_p11_read_line_drains_pasted_remainder():
+    async def _inner():
+        repl, ws, q, hub, st = make_repl()
+        feed(q, b"first\rsecond\r")
+        kind1, text1 = await asyncio.wait_for(repl._read_line(), timeout=2)
+        kind2, text2 = await asyncio.wait_for(repl._read_line(), timeout=2)
+        assert (kind1, text1) == ("line", "first")
+        assert (kind2, text2) == ("line", "second")
+    run(_inner())
+
+
+def test_p11_wait_ctrl_c_keeps_post_cancel_bytes():
+    async def _inner():
+        repl, ws, q, hub, st = make_repl()
+        feed(q, b"abc\x03def\r")
+        await asyncio.wait_for(repl._wait_ctrl_c(), timeout=2)
+        # "abc" arrived mid-stream: discarded (AD-54). "def" came after ^C:
+        # it belongs to the next prompt.
+        kind, text = await asyncio.wait_for(repl._read_line(), timeout=2)
+        assert (kind, text) == ("line", "def")
+    run(_inner())
+
+
+def test_p11_read_line_ctrl_c_keeps_remainder():
+    async def _inner():
+        repl, ws, q, hub, st = make_repl()
+        feed(q, b"\x03next\r")
+        kind, _ = await asyncio.wait_for(repl._read_line(), timeout=2)
+        assert kind == "ctrl_c"
+        kind2, text2 = await asyncio.wait_for(repl._read_line(), timeout=2)
+        assert (kind2, text2) == ("line", "next")
+    run(_inner())
+
+
+# --- P12: backspace erases a full UTF-8 char ---------------------------------------
+
+def test_p12_read_line_erase_multibyte_utf8():
+    async def _inner():
+        repl, ws, q, hub, st = make_repl()
+        feed(q, "سلام".encode("utf-8"), b"\x7f\r")  # 4 chars x 2 bytes
+        kind, text = await repl._read_line()
+        assert kind == "line"
+        assert text == "سلا"  # one full char erased, not one byte
+    run(_inner())
+
+
+def test_p12_read_line_erase_mixed_ascii_and_multibyte():
+    async def _inner():
+        repl, ws, q, hub, st = make_repl()
+        feed(q, "aب".encode("utf-8"), b"\x7f\x7f\r")
+        kind, text = await repl._read_line()
+        assert (kind, text) == ("line", "")
     run(_inner())

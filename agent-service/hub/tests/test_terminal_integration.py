@@ -48,8 +48,13 @@ class StubWS:
         self.inbox: asyncio.Queue = asyncio.Queue()
         self.texts: list[str] = []
         self.binary: list[bytes] = []
+        self.closed = False
+        # P3 test hook: make send_text raise when the payload contains this.
+        self.fail_text_contains: str | None = None
 
     async def send_text(self, data):
+        if self.fail_text_contains and self.fail_text_contains in data:
+            raise RuntimeError("ws boom (test)")
         self.texts.append(data)
 
     async def send_bytes(self, data):
@@ -62,15 +67,20 @@ class StubWS:
         pass
 
     async def close(self, code=1000):
-        pass
+        self.closed = True
 
     def all_text(self):
         return "".join(self.texts)
 
+    def all_binary(self):
+        return b"".join(self.binary)
+
 
 class IntegHub:
-    def __init__(self, events):
+    def __init__(self, events, pin_map=None):
         self._events = events
+        # P8: pin_map lets the /model builtin resolve a canonical pin.
+        self.pin_map = pin_map or {}
         self.seen = []
 
     async def execute_stream(self, request):
@@ -82,7 +92,7 @@ class IntegHub:
         return {"tiers": [], "retired_models": []}
 
     def resolve_model_pin(self, name):
-        return (None, [])
+        return self.pin_map.get(name.strip().lower(), (None, []))
 
 
 async def wait_for(cond, timeout=15, what="condition"):
@@ -151,10 +161,10 @@ def test_ac1_banner_once_then_ctrl_h_parks_tui(tmp_path, monkeypatch):
         handler = start_handler(ws)
         try:
             await wait_for(
-                lambda: "Press Ctrl+H for HUB MODE" in ws.all_text(),
+                lambda: "Type /hub and press Enter for HUB MODE" in ws.all_text(),
                 what="offer banner")
             await asyncio.sleep(0.6)  # later output must not re-banner
-            assert ws.all_text().count("Press Ctrl+H for HUB MODE") == 1
+            assert ws.all_text().count("Type /hub and press Enter for HUB MODE") == 1
             assert "Resets in ~4d 2h." in ws.all_text()
             assert procs and procs[0].returncode is None  # TUI alive
 
@@ -180,7 +190,7 @@ def test_ac2_typed_hub_switches(tmp_path, monkeypatch):
         handler = start_handler(ws)
         try:
             await wait_for(
-                lambda: "Press Ctrl+H for HUB MODE" in ws.all_text(),
+                lambda: "Type /hub and press Enter for HUB MODE" in ws.all_text(),
                 what="offer banner")
             for ch in b"/hub\r":
                 ws.inbox.put_nowait({"bytes": bytes([ch])})
@@ -213,7 +223,7 @@ def test_ac3_question_served_with_agy_never_attempted(tmp_path, monkeypatch):
         handler = start_handler(ws)
         try:
             await wait_for(
-                lambda: "Press Ctrl+H for HUB MODE" in ws.all_text(),
+                lambda: "Type /hub and press Enter for HUB MODE" in ws.all_text(),
                 what="offer banner")
             ws.inbox.put_nowait({"bytes": b"\x08"})
             await wait_for(lambda: "hub> " in ws.all_text(),
@@ -236,22 +246,31 @@ def test_ac3_question_served_with_agy_never_attempted(tmp_path, monkeypatch):
 
 
 # --- AC-5: /exit with future estimate confirms, respawns, re-arms -------------
+# P7: new incarnation's first PTY bytes must not re-arm the banner early.
+# P8: the session pin survives the /exit respawn (AD-56).
 
 def test_ac5_exit_confirms_respawns_and_rearms(tmp_path, monkeypatch):
     async def _inner():
         ws = StubWS()
         procs: list = []
-        hub = IntegHub([])
+        hub = IntegHub([], pin_map={"claude opus 5.5": ("claude-opus-5.5", [])})
         install_patches(monkeypatch, tmp_path, "linger", hub, procs)
         handler = start_handler(ws)
         try:
             await wait_for(
-                lambda: "Press Ctrl+H for HUB MODE" in ws.all_text(),
+                lambda: "Type /hub and press Enter for HUB MODE" in ws.all_text(),
                 what="offer banner")
             ws.inbox.put_nowait({"bytes": b"\x08"})
             await wait_for(lambda: "hub> " in ws.all_text(),
                            what="hub prompt")
             assert len(procs) == 1
+
+            # P8: set a pin before exiting — it must survive the respawn.
+            for ch in b"/model claude opus 5.5\r":
+                ws.inbox.put_nowait({"bytes": bytes([ch])})
+            await wait_for(
+                lambda: "model pin set: claude-opus-5.5" in ws.all_text(),
+                what="pin set")
 
             for ch in b"/exit\r":
                 ws.inbox.put_nowait({"bytes": bytes([ch])})
@@ -264,10 +283,53 @@ def test_ac5_exit_confirms_respawns_and_rearms(tmp_path, monkeypatch):
                 lambda: "agy TUI reconnected" in ws.all_text(),
                 what="respawn note")
             assert len(procs) == 2  # fresh TUI incarnation
+            # P7: stale tail was cleared on respawn — the new incarnation's
+            # first PTY bytes ("some prompt output") must NOT re-arm early.
+            await wait_for(
+                lambda: ws.all_binary().count(b"some prompt output") == 2,
+                what="new incarnation's first PTY bytes")
+            assert ws.all_text().count(
+                "Type /hub and press Enter for HUB MODE") == 1
             # The new TUI prints quota death again -> detector re-arms.
             await wait_for(
-                lambda: ws.all_text().count("Press Ctrl+H for HUB MODE") == 2,
+                lambda: ws.all_text().count(
+                    "Type /hub and press Enter for HUB MODE") == 2,
                 what="second banner after respawn")
+            # P8: re-enter hub mode — the prompt shows the surviving pin.
+            # (Count occurrences: the pre-exit prompt already contains one.)
+            n_before = ws.all_text().count("hub [claude-opus-5.5]> ")
+            assert n_before >= 1  # pin was visible before the exit
+            ws.inbox.put_nowait({"bytes": b"\x08"})
+            await wait_for(
+                lambda: ws.all_text().count("hub [claude-opus-5.5]> ") > n_before,
+                what="pin in prompt after respawn")
+        finally:
+            await stop_handler(handler)
+    run(_inner())
+
+
+# --- P3: REPL crash closes the websocket instead of wedging --------------------
+
+def test_p3_repl_crash_closes_websocket(tmp_path, monkeypatch):
+    async def _inner():
+        ws = StubWS()
+        # The hubmode banner print raises -> run() propagates (banner is
+        # outside the per-iteration try) -> reap_repl must close the
+        # websocket instead of leaving phase="hubmode" with hub_q=None.
+        ws.fail_text_contains = "through the model hub"
+        procs: list = []
+        hub = IntegHub([])
+        install_patches(monkeypatch, tmp_path, "linger", hub, procs)
+        handler = start_handler(ws)
+        try:
+            await wait_for(
+                lambda: "Type /hub and press Enter for HUB MODE" in ws.all_text(),
+                what="offer banner")
+            ws.inbox.put_nowait({"bytes": b"\x08"})
+            await wait_for(lambda: ws.closed,
+                           what="websocket closed after REPL crash")
+            assert len(procs) == 1  # parked TUI; no respawn attempted
+            assert "hub> " not in ws.all_text()  # REPL never reached a prompt
         finally:
             await stop_handler(handler)
     run(_inner())

@@ -59,11 +59,14 @@ def parse_reset_estimate(text: str) -> Optional[str]:
         return None
     hours = int(m.group(1) or 0)
     minutes = int(m.group(2) or 0)
+    seconds = int(m.group(3) or 0)  # P10: seconds-only ("Resets in 90s")
     if hours >= 48:
         return f"~{hours // 24}d {hours % 24}h"
     if hours >= 1:
         return f"~{hours}h {minutes}m"
-    return f"~{minutes}m"
+    if minutes >= 1:
+        return f"~{minutes}m"
+    return f"~{seconds}s"
 
 
 _AGY_UNKNOWN_MODEL_MARKERS = [

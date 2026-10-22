@@ -426,3 +426,42 @@ def test_mcp_hub_ask_no_carrier_falls_back_by_default(registry_with_fake):
     assert payload["pinned_model"] == "zzz-model"
     assert payload["tier_used"] == "fallback"
     assert payload["model"] == "plain-model"
+
+
+# --- P6: resolve_model_pin is executed (terminal hub-mode /model) ----------------
+# These tests fail if the body of ModelHub.resolve_model_pin is gutted: only
+# the definition, the call site, and stub doubles existed before.
+
+def _pin_hub():
+    cfg = cfg_with_catalog(
+        make_tier("openrouter", 0, ["anthropic/claude-opus-5.5"]),
+        catalog=opus_catalog(),
+    )
+    return make_hub(cfg)
+
+
+def test_p6_resolve_model_pin_known_alias():
+    hub = _pin_hub()
+    canonical, suggestions = hub.resolve_model_pin("opus 5.5")
+    assert canonical == "claude-opus-5.5"
+    assert suggestions == []
+
+
+def test_p6_resolve_model_pin_canonical_id():
+    hub = _pin_hub()
+    canonical, suggestions = hub.resolve_model_pin("claude-opus-5.5")
+    assert canonical == "claude-opus-5.5"
+    assert suggestions == []
+
+
+def test_p6_resolve_model_pin_unknown_gives_suggestions():
+    hub = _pin_hub()
+    canonical, suggestions = hub.resolve_model_pin("opus 9")
+    assert canonical is None
+    assert suggestions  # non-empty: the caller prints these
+
+
+def test_p6_resolve_model_pin_sentinels_unpinned():
+    hub = _pin_hub()
+    for sentinel in ("", "auto", "AUTO", "default", "  "):
+        assert hub.resolve_model_pin(sentinel) == (None, [])

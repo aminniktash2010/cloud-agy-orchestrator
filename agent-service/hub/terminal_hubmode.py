@@ -12,6 +12,7 @@ never executed. Model answers render as inert terminal text.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
@@ -25,6 +26,24 @@ _DIM = "\x1b[90m"
 _RESET = "\x1b[0m"
 _YELLOW = "\x1b[1;33m"
 _GREEN = "\x1b[1;32m"
+
+# P1: model answer text is untrusted — strip anything that could drive the
+# terminal (CSI, OSC, and single-char sequences like RIS \x1bc). Applied to
+# `log`-branch payloads ONLY; banners/help use intentional ANSI via _print.
+_ANSI_RE = re.compile(
+    r"\x1b"
+    r"(?:"
+    r"\[[0-9;?]*[ -/]*[@-~]"          # CSI
+    r"|\][^\x07\x1b]*(?:\x07|\x1b\\\\)"  # OSC ... ST
+    r"|[()][0-9A-B]"                  # charset select
+    r"|[#%][0-9A-Z]"                  # other intermediates
+    r"|[0-9A-Za-z@-_]"                 # single-char (RIS \x1bc, 7/8, M, ...)
+    r")"
+)
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 # ---------------------------------------------------------------------------
 # Text contracts (AD-55) — pinned by tests
@@ -42,8 +61,9 @@ def offer_banner(reset_estimate: Optional[str]) -> str:
     return (
         f"\r\n{_YELLOW}⚠️ Antigravity quota exhausted in this terminal.{est}{_RESET}\r\n"
         "This TUI can't reach the hub's fallback models.\r\n"
-        "Press Ctrl+H for HUB MODE — Q&A through the hub ladder (answers only,\r\n"
-        "no repo edits). Or type /hub and press Enter. (Ignore this to keep the TUI.)\r\n"
+        "Type /hub and press Enter for HUB MODE — Q&A through the hub ladder\r\n"
+        "(answers only, no repo edits). iPhone key bar: Ctrl+H works too.\r\n"
+        "(Ignore this to keep the TUI.)\r\n"
         f"{_DIM}{HONEST_CEILING}{_RESET}\r\n"
     )
 
@@ -53,8 +73,8 @@ def path_b_banner(reset_estimate: Optional[str]) -> str:
     est = f" Resets in {reset_estimate}." if reset_estimate else ""
     return (
         f"\r\n{_YELLOW}The agy session ended on exhausted quota.{est}{_RESET}\r\n"
-        "Press Ctrl+H for HUB MODE — Q&A through the hub ladder (answers only,\r\n"
-        "no repo edits). Or type /hub and press Enter.\r\n"
+        "Type /hub and press Enter for HUB MODE — Q&A through the hub ladder\r\n"
+        "(answers only, no repo edits). iPhone key bar: Ctrl+H works too.\r\n"
         f"{_DIM}{HONEST_CEILING}{_RESET}\r\n"
     )
 
@@ -123,6 +143,9 @@ class HubRepl:
         self._q = hub_q
         self._hub = model_hub
         self._state = state
+        # P11: pasted-chunk remainder — bytes after the interesting byte in a
+        # chunk are drained here in order, before the next queue read.
+        self._leftover = bytearray()
 
     # -- output helpers ----------------------------------------------------
 
@@ -138,19 +161,27 @@ class HubRepl:
 
     async def _read_line(self) -> tuple[str, Optional[str]]:
         """Returns ("line", text) | ("ctrl_c", None). Own echo; the handler
-        feeds this queue only while in HUBMODE."""
+        feeds this queue only while in HUBMODE. Pasted-chunk remainders are
+        drained from ``_leftover`` in order (P11)."""
         buf = bytearray()
         while True:
-            chunk = await self._q.get()
-            for b in chunk:
+            if self._leftover:
+                chunk, self._leftover = bytes(self._leftover), bytearray()
+            else:
+                chunk = await self._q.get()
+            for i, b in enumerate(chunk):
                 if b in (0x0D, 0x0A):  # \r / \n submits
+                    self._leftover = bytearray(chunk[i + 1:])
                     await self._send_bytes(b"\r\n")
                     return "line", bytes(buf).decode("utf-8", errors="replace")
-                if b == 0x7F:  # DEL erases
+                if b == 0x7F:  # DEL erases one full UTF-8 char, not one byte (P12)
                     if buf:
-                        buf.pop()
+                        while buf and (buf[-1] & 0xC0) == 0x80:
+                            buf.pop()  # UTF-8 continuation bytes
+                        buf.pop()  # lead byte
                         await self._send_bytes(b"\b \b")
                 elif b == 0x03:  # Ctrl+C
+                    self._leftover = bytearray(chunk[i + 1:])
                     return "ctrl_c", None
                 elif b < 0x20:
                     continue  # other control bytes ignored
@@ -164,9 +195,12 @@ class HubRepl:
         kind = ev.kind
         p = ev.payload
         if kind == "log":
-            # Adapters yield answer chunks as `log` — raw passthrough.
+            # Adapters yield answer chunks as `log` — raw model text. P1:
+            # strip ANSI escape sequences so model output renders as inert
+            # text (a model could otherwise clear the screen or spoof
+            # readouts with CSI/OSC). Banners/help keep intentional ANSI.
             text = p if isinstance(p, str) else (p.get("text", "") if isinstance(p, dict) else str(p))
-            await self._print(text)
+            await self._print(_strip_ansi(text))
         elif kind == "status":
             text = p if isinstance(p, str) else ((p or {}).get("text") or str(p))
             await self._print(f"{_DIM}{text}{_RESET}\r\n")
@@ -225,8 +259,15 @@ class HubRepl:
 
     async def _wait_ctrl_c(self) -> None:
         while True:
-            chunk = await self._q.get()
-            if b"\x03" in chunk:
+            if self._leftover:
+                chunk, self._leftover = bytes(self._leftover), bytearray()
+            else:
+                chunk = await self._q.get()
+            idx = chunk.find(b"\x03")
+            if idx >= 0:
+                # Bytes before ^C arrived mid-stream: discarded (AD-54).
+                # Bytes after ^C belong to the next prompt: kept (P11).
+                self._leftover = bytearray(chunk[idx + 1:])
                 return
             # Non-^C input arriving mid-stream is discarded (AD-54).
 
@@ -259,6 +300,12 @@ class HubRepl:
                 except asyncio.CancelledError:
                     pass
                 # Any bytes the watcher ate mid-stream stay discarded (AD-54).
+                # P2: retrieve the consumer so a stream exception surfaces as
+                # an error line instead of dying as "never retrieved".
+                try:
+                    await consumer
+                except Exception as e:  # noqa: BLE001 — REPL never raises (FR-8)
+                    await self._print(f"⚠️ hub error: {e}\r\n")
         finally:
             for t in (consumer, watcher):
                 if not t.done():
@@ -306,7 +353,7 @@ class HubRepl:
         )
 
     async def _do_exit(self) -> Optional[str]:
-        """Returns "respawn" | "stay" | None (None = keep the REPL running)."""
+        """Returns "respawn" | None (None = keep the REPL running)."""
         est = self._state.reset_estimate
         if est:
             await self._print(
@@ -338,27 +385,34 @@ class HubRepl:
     # -- main loop ------------------------------------------------------------
 
     async def run(self) -> str:
-        """Runs the REPL. Returns "respawn" | "stay" (the handler acts on it).
+        """Runs the REPL. Returns "respawn" (the handler acts on it).
         The handler cancels this task on websocket close (FR-8)."""
         await self._print(hubmode_banner())
         while True:
-            await self._prompt()
-            kind, payload = await self._read_line()
-            if kind == "ctrl_c":
-                await self._print("^C")
-                continue
-            line = (payload or "").strip()
-            if not line:
-                continue
+            # P3: the whole iteration is guarded — one bad iteration (prompt,
+            # read_line, a builtin) prints an error and the REPL lives on.
+            # If even the error print fails the socket is broken: re-raise so
+            # reap_repl tears the connection down instead of wedging it.
             try:
+                await self._prompt()
+                kind, payload = await self._read_line()
+                if kind == "ctrl_c":
+                    await self._print("^C")
+                    continue
+                line = (payload or "").strip()
+                if not line:
+                    continue
                 if line.startswith("/"):
                     action = await self._builtin(line)
-                    if action in ("respawn", "stay"):
+                    if action == "respawn":
                         return action
                     continue
                 await self._ask(line)
             except Exception as e:  # noqa: BLE001 — REPL never raises (FR-8)
-                await self._print(f"⚠️ hub error: {e}\r\n")
+                try:
+                    await self._print(f"⚠️ hub error: {e}\r\n")
+                except Exception:
+                    raise
 
 
 async def run_hub_repl(
