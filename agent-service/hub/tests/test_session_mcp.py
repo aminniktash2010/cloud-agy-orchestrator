@@ -199,3 +199,35 @@ def test_build_isolated_env_trailing_slash_url_normalized(tmp_path, monkeypatch)
     cfg = repo / ".agy_session" / ".gemini" / "config" / "mcp_config.json"
     assert entry_of(cfg)["serverUrl"] == f"{HUB_URL}/mcp"
     assert "//mcp" not in entry_of(cfg)["serverUrl"]
+
+
+def test_build_isolated_env_empty_public_url_falls_back_to_default(tmp_path, monkeypatch):
+    # P1: explicitly-set-but-empty HUB_PUBLIC_URL must not produce "/mcp"
+    main_module = _import_main()
+    monkeypatch.setenv("HUB_MCP_TOKEN", TOKEN)
+    monkeypatch.setenv("HUB_PUBLIC_URL", "")
+    repo = tmp_path / "some-repo"
+    main_module.build_isolated_env(repo)
+    cfg = repo / ".agy_session" / ".gemini" / "config" / "mcp_config.json"
+    assert entry_of(cfg)["serverUrl"] == f"{HUB_URL}/mcp"
+
+
+def test_build_isolated_env_token_whitespace_stripped(tmp_path, monkeypatch):
+    # P2: padded token must not produce a malformed Authorization header
+    main_module = _import_main()
+    monkeypatch.setenv("HUB_MCP_TOKEN", f"  {TOKEN}\n")
+    monkeypatch.delenv("HUB_PUBLIC_URL", raising=False)
+    repo = tmp_path / "some-repo"
+    main_module.build_isolated_env(repo)
+    cfg = repo / ".agy_session" / ".gemini" / "config" / "mcp_config.json"
+    assert entry_of(cfg)["headers"]["Authorization"] == f"Bearer {TOKEN}"
+
+
+def test_build_isolated_env_whitespace_only_token_skips(tmp_path, monkeypatch):
+    # P2: whitespace-only token must hit the skip path (no entry written)
+    main_module = _import_main()
+    monkeypatch.setenv("HUB_MCP_TOKEN", "  \n\t ")
+    repo = tmp_path / "some-repo"
+    main_module.build_isolated_env(repo)
+    cfg = repo / ".agy_session" / ".gemini" / "config" / "mcp_config.json"
+    assert not cfg.exists()

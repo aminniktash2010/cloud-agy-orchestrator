@@ -228,11 +228,11 @@ def build_isolated_env(repo_dir: Path) -> dict[str, str]:
     # Placed after the archive restore above (which can overwrite the session
     # dir) and next to the legacy MCP copy. Never fails session setup.
     try:
-        hub_token = os.environ.get("HUB_MCP_TOKEN", "")
+        hub_token = os.environ.get("HUB_MCP_TOKEN", "").strip()
         if hub_token:
-            hub_url = os.environ.get(
-                "HUB_PUBLIC_URL",
-                "https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app",
+            hub_url = (
+                os.environ.get("HUB_PUBLIC_URL", "").strip()
+                or "https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app"
             ).rstrip("/")
             ensure_hub_mcp_entry(
                 session_home / ".gemini" / "config" / "mcp_config.json",
