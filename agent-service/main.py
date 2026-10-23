@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from hub import ModelHub, load_config
 from hub import observability as hub_observability
 from hub.router import HubError
+from hub.session_mcp import ensure_hub_mcp_entry
 from hub.signals import AGY_QUOTA_DEATH_MARKERS, agy_exhausted, parse_reset_estimate
 from hub.terminal_hubmode import (
     HubTermState,
@@ -221,6 +222,27 @@ def build_isolated_env(repo_dir: Path) -> dict[str, str]:
     base_mcp = Path("/root/.config/antigravity/mcp_config.json")
     if base_mcp.exists() and not (config_dir / "mcp_config.json").exists():
         shutil.copy2(base_mcp, config_dir / "mcp_config.json")
+
+    # Self-healing hub MCP registration (AD-61): deploys wipe container-local
+    # session dirs, so re-assert the model-hub entry on every session setup.
+    # Placed after the archive restore above (which can overwrite the session
+    # dir) and next to the legacy MCP copy. Never fails session setup.
+    try:
+        hub_token = os.environ.get("HUB_MCP_TOKEN", "").strip()
+        if hub_token:
+            hub_url = (
+                os.environ.get("HUB_PUBLIC_URL", "").strip()
+                or "https://agy-cloud-orchestrator-nwzndsxxfa-uc.a.run.app"
+            ).rstrip("/")
+            ensure_hub_mcp_entry(
+                session_home / ".gemini" / "config" / "mcp_config.json",
+                hub_url,
+                hub_token,
+            )
+        else:
+            logger.warning("HUB_MCP_TOKEN unset — skipping model-hub MCP registration")
+    except Exception as e:
+        logger.warning("model-hub MCP registration failed (continuing): %s", e)
 
     # Populate Antigravity CLI OAuth credentials into the isolated session
     cli_gemini_dir.mkdir(parents=True, exist_ok=True)
